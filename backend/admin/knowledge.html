@@ -45,6 +45,30 @@
   </section>
 
   <section class="panel">
+    <div class="panel-head">
+      <h2>Batch upload</h2>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="file" id="batchFileInput" multiple accept=".pdf,.docx,.txt,.md,.csv,.html,.htm,.json" />
+        <button id="batchUploadBtn" class="primary">Upload all</button>
+      </div>
+      <div class="status-line" style="margin-top:6px;">
+        Select many files at once (your file picker supports multi-select — ctrl/cmd-click, or shift-click a range).
+        For each <span class="mono">.md</span> file, country/category/date are auto-detected from its own metadata block if present
+        (<span class="mono">**Country:**</span> / <span class="mono">**Category:**</span> or <span class="mono">**Research Domains:**</span> / <span class="mono">**Date:**</span> lines) —
+        no need to tag files by hand. Files without that metadata block are ingested as tenant-general content.
+      </div>
+      <div id="batchProgressWrap" style="display:none; margin-top:10px;">
+        <div class="status-line" id="batchProgressLabel">Uploading…</div>
+        <div class="progress-bar"><div class="progress-bar-fill" id="batchProgressFill" style="width:0%;"></div></div>
+      </div>
+      <div id="batchResult" style="margin-top:12px;"></div>
+      <div id="batchError" class="status-line err" style="margin-top:8px;"></div>
+    </div>
+  </section>
+
+  <section class="panel">
     <div class="panel-head"><h2>Files</h2><button id="refreshFilesBtn">Refresh</button></div>
     <div class="panel-body" id="filesBody"><div class="empty">Select a tenant to see its files.</div></div>
   </section>
@@ -172,6 +196,64 @@ document.getElementById("uploadBtn").addEventListener("click", () => {
     } catch {
       errEl.textContent = `Upload failed (${xhr.status})`;
     }
+  };
+  xhr.onerror = () => {
+    wrap.style.display = "none";
+    errEl.textContent = "Network error during upload — check the KB Service is reachable.";
+  };
+  xhr.send(form);
+});
+
+// --- Batch upload: many files in one request, server auto-parses each
+// file's own metadata block for country/category/date ---
+document.getElementById("batchUploadBtn").addEventListener("click", () => {
+  const fileInput = document.getElementById("batchFileInput");
+  const errEl = document.getElementById("batchError");
+  const resultEl = document.getElementById("batchResult");
+  errEl.textContent = "";
+  resultEl.innerHTML = "";
+  if (!selectedTenant) { errEl.textContent = "Select a tenant first."; return; }
+  if (!fileInput.files.length) { errEl.textContent = "Choose files first."; return; }
+
+  const files = [...fileInput.files];
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+
+  const wrap = document.getElementById("batchProgressWrap");
+  const fill = document.getElementById("batchProgressFill");
+  const label = document.getElementById("batchProgressLabel");
+  wrap.style.display = "block";
+  fill.style.width = "0%";
+  label.textContent = `Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`;
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/admin/kb/${encodeURIComponent(selectedTenant)}/upload-batch`);
+  xhr.upload.addEventListener("progress", (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      fill.style.width = pct + "%";
+      label.textContent = `Uploading ${files.length} file${files.length === 1 ? "" : "s"}… ${pct}%`;
+    }
+  });
+  xhr.onload = () => {
+    wrap.style.display = "none";
+    fileInput.value = "";
+    let data;
+    try {
+      data = JSON.parse(xhr.responseText);
+    } catch {
+      errEl.textContent = `Upload failed (${xhr.status})`;
+      return;
+    }
+    if (xhr.status < 200 || xhr.status >= 300) {
+      errEl.textContent = data.error || `Upload failed (${xhr.status})`;
+      return;
+    }
+    const accepted = data.accepted || [];
+    const rejected = data.rejected || [];
+    resultEl.innerHTML = `<div class="status-line">${accepted.length} file${accepted.length === 1 ? "" : "s"} queued for ingestion${rejected.length ? `, ${rejected.length} rejected` : ""}.</div>` +
+      (rejected.length ? `<div class="status-line err" style="margin-top:4px;">${rejected.map((r) => `${esc(r.filename)}: ${esc(r.reason)}`).join("<br>")}</div>` : "");
+    for (const job of accepted) trackJob(job.jobId, job.filename, "ingest");
   };
   xhr.onerror = () => {
     wrap.style.display = "none";
