@@ -59,7 +59,7 @@ const PORT = process.env.PORT || 3001;
 // convenience — real widget embeds always pass their own tenantId via
 // data-tenant). Was "default" back when that was a placeholder demo tenant;
 // repointed to a real tenant now that both actual tenants are real clients.
-const DEFAULT_TENANT = "edu-consultancy-demo";
+const DEFAULT_TENANT = "gallup-pakistan";
 
 // ---------------------------------------------------------------------------
 // Logging — append-only JSONL files, one line per event.
@@ -348,7 +348,16 @@ async function buildTenantsMap() {
   lastTenantLoadErrors = buildErrors;
 
   if (!next.has(DEFAULT_TENANT)) {
-    throw new Error(`No tenant named "${DEFAULT_TENANT}" found (checked ${tenantStore.isConfigured() ? "the database" : "data/tenants/*.json"}) — at least one tenant with this id is required as the fallback for requests that omit tenantId.`);
+    // Self-heal: if there's exactly one tenant loaded and it's just under
+    // the wrong id (e.g. left over from a manual rename), adopt it as
+    // DEFAULT_TENANT instead of crash-looping forever.
+    if (next.size === 1) {
+      const [onlyId, onlyTenant] = [...next.entries()][0];
+      console.warn(`⚠️  No tenant named "${DEFAULT_TENANT}" found, but exactly one tenant ("${onlyId}") is loaded — using it as the fallback instead of crashing.`);
+      next.set(DEFAULT_TENANT, onlyTenant);
+    } else {
+      throw new Error(`No tenant named "${DEFAULT_TENANT}" found (checked ${tenantStore.isConfigured() ? "the database" : "data/tenants/*.json"}) — at least one tenant with this id is required as the fallback for requests that omit tenantId.`);
+    }
   }
 
   return next;
