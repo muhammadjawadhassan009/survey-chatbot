@@ -59,7 +59,7 @@ const PORT = process.env.PORT || 3001;
 // convenience — real widget embeds always pass their own tenantId via
 // data-tenant). Was "default" back when that was a placeholder demo tenant;
 // repointed to a real tenant now that both actual tenants are real clients.
-const DEFAULT_TENANT = "edu-consultancy-demo";
+const DEFAULT_TENANT = "gallup-pakistan";
 
 // ---------------------------------------------------------------------------
 // Logging — append-only JSONL files, one line per event.
