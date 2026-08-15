@@ -42,7 +42,6 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.ingestion import IngestionPipeline, DocstoreStrategy
 from llama_index.core.node_parser import SentenceSplitter
