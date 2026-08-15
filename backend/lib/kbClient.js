@@ -84,6 +84,31 @@ async function uploadFile(tenantId, fileBuffer, filename, mimeType, country, cat
   return request("POST", "/ingest", { formData: form });
 }
 
+// Batch variant — for uploading many files (e.g. a whole KB archive) in one
+// admin-panel action instead of one at a time. countryByFilename/
+// categoryByFilename/dateByFilename are plain objects keyed by filename,
+// matching /ingest-batch's JSON-map convention on the KB Service side.
+// Files larger in total than the KB Service's own request-size limit will
+// fail there with a clear error — this function doesn't chunk the batch
+// itself, since the admin route calling this already caps count/total size
+// before it gets here.
+async function uploadBatch(tenantId, files, { countryByFilename, categoryByFilename, dateByFilename, vectorDb } = {}) {
+  if (!isConfigured()) return { ok: false, error: "KB Service is not configured (KB_SERVICE_URL unset).", status: 503 };
+  const form = new FormData();
+  form.append("tenantId", tenantId);
+  if (countryByFilename && Object.keys(countryByFilename).length) form.append("countries", JSON.stringify(countryByFilename));
+  if (categoryByFilename && Object.keys(categoryByFilename).length) form.append("categories", JSON.stringify(categoryByFilename));
+  if (dateByFilename && Object.keys(dateByFilename).length) form.append("dates", JSON.stringify(dateByFilename));
+  appendVectorDbFields(form, vectorDb);
+  for (const f of files) {
+    form.append("files", new Blob([f.buffer], { type: f.mimeType || "application/octet-stream" }), f.filename);
+  }
+  // A large batch takes longer than the default single-file timeout to even
+  // get queued (FormData with 100+ files takes real time to upload/parse
+  // server-side) — give this call more headroom than a normal request.
+  return request("POST", "/ingest-batch", { formData: form, timeoutMs: 60_000, retries: 0 });
+}
+
 async function listFiles(tenantId) {
   return request("GET", `/tenants/${encodeURIComponent(tenantId)}/files`);
 }
@@ -164,4 +189,4 @@ function topKFor(useKbOnly, query) {
   return CROSS_ANALYSIS_RE.test(query || "") ? 16 : 8;
 }
 
-module.exports = { isConfigured, health, uploadFile, listFiles, deleteFile, reindexFile, getJob, listJobs, search, topKFor };
+module.exports = { isConfigured, health, uploadFile, uploadBatch, listFiles, deleteFile, reindexFile, getJob, listJobs, search, topKFor };
