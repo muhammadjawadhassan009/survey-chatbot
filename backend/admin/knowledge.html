@@ -253,7 +253,7 @@ document.getElementById("batchUploadBtn").addEventListener("click", () => {
     const rejected = data.rejected || [];
     resultEl.innerHTML = `<div class="status-line">${accepted.length} file${accepted.length === 1 ? "" : "s"} queued for ingestion${rejected.length ? `, ${rejected.length} rejected` : ""}.</div>` +
       (rejected.length ? `<div class="status-line err" style="margin-top:4px;">${rejected.map((r) => `${esc(r.filename)}: ${esc(r.reason)}`).join("<br>")}</div>` : "");
-    for (const job of accepted) trackJob(job.jobId, job.filename, "ingest");
+    if (accepted.length) trackBatchJobs(accepted);
   };
   xhr.onerror = () => {
     wrap.style.display = "none";
@@ -281,6 +281,13 @@ function trackJob(jobId, filename, kind) {
   pollJob(jobId);
 }
 
+// Single-file upload path — one job, so its own independent poll loop is
+// fine. NOT used for batch uploads (see trackBatchJobs below) — spinning up
+// one of these per file in a 282-file batch is exactly what caused most
+// files to show as "failed" despite ingesting fine server-side: 282
+// concurrent loops blow past the browser's ~6-connections-per-host limit,
+// most requests queue and time out, and the timeout gets misreported as a
+// real ingestion failure.
 async function pollJob(jobId) {
   if (pollingJobs.has(jobId)) return;
   pollingJobs.add(jobId);
@@ -310,6 +317,55 @@ async function pollJob(jobId) {
   } finally {
     pollingJobs.delete(jobId);
   }
+}
+
+// Batch upload path — ONE shared poll loop for the whole batch, using the
+// tenant-wide job-list endpoint (already returns recent jobs including
+// status) instead of hitting each job's own endpoint individually. This is
+// what keeps a 282-file batch to ~1 request/second total instead of 282.
+async function trackBatchJobs(jobs) {
+  const byId = new Map(jobs.map((j) => [j.jobId, { ...j, status: "queued" }]));
+  for (const j of byId.values()) activeJobsMap.set(j.jobId, j);
+  renderActiveJobs([...activeJobsMap.values()].slice(0, 20)); // full list can be huge — cap what actually renders
+
+  const resultEl = document.getElementById("batchResult");
+  const startedAt = Date.now();
+  const maxWaitMs = 5 * 60 * 1000; // large batches genuinely take a few minutes, not 60s
+
+  while (Date.now() - startedAt < maxWaitMs) {
+    let data;
+    try {
+      data = await api(`/api/admin/kb/${encodeURIComponent(selectedTenant)}/jobs?limit=${Math.max(200, byId.size)}`);
+    } catch (err) {
+      // A single failed poll tick doesn't mean the jobs failed — just wait
+      // and try again rather than marking hundreds of files "failed" for
+      // one flaky request.
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    for (const serverJob of data.jobs || []) {
+      const entry = byId.get(serverJob.jobId);
+      if (entry) entry.status = serverJob.status;
+    }
+
+    const all = [...byId.values()];
+    const done = all.filter((j) => j.status === "completed" || j.status === "failed");
+    const failed = all.filter((j) => j.status === "failed");
+    resultEl.innerHTML = `<div class="status-line">${done.length}/${all.length} finished (${failed.length} failed)…</div>`;
+    renderActiveJobs(all.slice(0, 20));
+
+    if (done.length === all.length) break;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  const all = [...byId.values()];
+  const failed = all.filter((j) => j.status === "failed");
+  resultEl.innerHTML = `<div class="status-line">Done: ${all.length - failed.length}/${all.length} ingested successfully${failed.length ? `, ${failed.length} failed` : ""}.</div>` +
+    (failed.length ? `<div class="status-line err" style="margin-top:4px;">${failed.slice(0, 20).map((f) => esc(f.filename)).join(", ")}${failed.length > 20 ? `, +${failed.length - 20} more` : ""}</div>` : "");
+  for (const j of all) activeJobsMap.delete(j.jobId);
+  renderActiveJobs([]);
+  loadFiles();
+  loadHistory();
 }
 
 // --- Files ---
