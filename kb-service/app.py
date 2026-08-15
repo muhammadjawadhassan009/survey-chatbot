@@ -224,7 +224,7 @@ def get_job(job_id: str, x_api_key: str = Header(default=None)):
 
 
 @app.get("/tenants/{tenant_id}/jobs")
-def list_jobs(tenant_id: str, limit: int = Query(default=50, ge=1, le=200), x_api_key: str = Header(default=None)):
+def list_jobs(tenant_id: str, limit: int = Query(default=50, ge=1, le=1000), x_api_key: str = Header(default=None)):
     require_api_key(x_api_key)
     return {"tenantId": tenant_id, "jobs": jobs.list_jobs(tenant_id, limit)}
 
