@@ -59,8 +59,7 @@ const PORT = process.env.PORT || 3001;
 // convenience — real widget embeds always pass their own tenantId via
 // data-tenant). Was "default" back when that was a placeholder demo tenant;
 // repointed to a real tenant now that both actual tenants are real clients.
-
-const DEFAULT_TENANT = "gallup-pakistan";
+const DEFAULT_TENANT = "edu-consultancy-demo";
 
 // ---------------------------------------------------------------------------
 // Logging — append-only JSONL files, one line per event.
@@ -349,17 +348,8 @@ async function buildTenantsMap() {
   lastTenantLoadErrors = buildErrors;
 
   if (!next.has(DEFAULT_TENANT)) {
-      // Self-heal: if there's exactly one tenant loaded and it's just under
-      // the wrong id (e.g. left over from a manual rename), adopt it as
-      // DEFAULT_TENANT instead of crash-looping forever.
-      if (next.size === 1) {
-        const [onlyId, onlyTenant] = [...next.entries()][0];
-        console.warn(`⚠️  No tenant named "${DEFAULT_TENANT}" found, but exactly one tenant ("${onlyId}") is loaded — using it as the fallback instead of crashing.`);
-        next.set(DEFAULT_TENANT, onlyTenant);
-      } else {
-        throw new Error(`No tenant named "${DEFAULT_TENANT}" found (checked ${tenantStore.isConfigured() ? "the database" : "data/tenants/*.json"}) — at least one tenant with this id is required as the fallback for requests that omit tenantId.`);
-      }
-    }
+    throw new Error(`No tenant named "${DEFAULT_TENANT}" found (checked ${tenantStore.isConfigured() ? "the database" : "data/tenants/*.json"}) — at least one tenant with this id is required as the fallback for requests that omit tenantId.`);
+  }
 
   return next;
 }
@@ -950,6 +940,87 @@ app.post("/api/admin/kb/:tenantId/upload", adminAuth, kbUpload.single("file"), a
   const country = typeof req.body?.country === "string" && req.body.country.trim() ? req.body.country.trim() : undefined;
   const category = typeof req.body?.category === "string" && req.body.category.trim() ? req.body.category.trim() : undefined;
   const result = await kbClient.uploadFile(req.params.tenantId, req.file.buffer, req.file.originalname, req.file.mimetype, country, category, tenant.dataResidency);
+  if (!result.ok) {
+    return res.status(result.status === 503 ? 503 : 502).json({ error: result.error });
+  }
+  res.json(result.data);
+});
+
+// Batch upload — for ingesting many files (e.g. a whole KB archive) in one
+// admin-panel action. Each file's "## Metadata" block (see
+// prepare_for_ingestion.py / any file generated the same way) is parsed
+// automatically for Date and Research Domains so the admin doesn't have to
+// tag 200+ files by hand — country/category/date can still be overridden
+// per-file from the client if that parsing doesn't apply to a given file
+// (e.g. non-Markdown uploads), via the same filename-keyed JSON maps
+// /ingest-batch itself accepts.
+const KB_BATCH_MAX_FILES = 500;
+const kbBatchUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: KB_BATCH_MAX_FILES } });
+
+const METADATA_DATE_RE = /\*\*Date:\*\*\s*(\S+)/;
+const METADATA_DOMAINS_RE = /\*\*Research Domains:\*\*\s*(.+)/;
+const METADATA_COUNTRY_RE = /\*\*Country:\*\*\s*(.+)/;
+
+function parseEmbeddedMetadata(buffer) {
+  // Only meaningful for text-like files — a PDF/binary buffer won't match
+  // either pattern, so this is a harmless no-op for non-Markdown uploads.
+  const text = buffer.toString("utf8");
+  const dateMatch = METADATA_DATE_RE.exec(text);
+  const domainsMatch = METADATA_DOMAINS_RE.exec(text);
+  const countryMatch = METADATA_COUNTRY_RE.exec(text);
+  return {
+    date: dateMatch ? dateMatch[1].trim() : null,
+    // ingestion.py's ingest_file takes one "category" string, not a list —
+    // the comma-joined domains string is stored as-is; exact-match filtering
+    // on a single domain still works via substring search, multi-domain
+    // filtering does not — acceptable simplification for now, matches what
+    // the original seed_gallup.py script did.
+    category: domainsMatch ? domainsMatch[1].trim() : null,
+    country: countryMatch ? countryMatch[1].trim() : null,
+  };
+}
+
+app.post("/api/admin/kb/:tenantId/upload-batch", adminAuth, kbBatchUpload.array("files", KB_BATCH_MAX_FILES), async (req, res) => {
+  const tenant = getTenant(req.params.tenantId);
+  if (!tenant) {
+    return res.status(400).json({ error: `Unknown tenantId "${req.params.tenantId}"` });
+  }
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: "No files provided (expected multipart field 'files', repeated)" });
+  }
+
+  // Optional client-supplied overrides — same filename-keyed JSON-map shape
+  // /ingest-batch expects, so the admin UI can pass these straight through
+  // for uploads where the auto-parsed metadata is wrong or absent.
+  let countryOverrides = {};
+  let categoryOverrides = {};
+  let dateOverrides = {};
+  try {
+    if (req.body?.countries) countryOverrides = JSON.parse(req.body.countries);
+    if (req.body?.categories) categoryOverrides = JSON.parse(req.body.categories);
+    if (req.body?.dates) dateOverrides = JSON.parse(req.body.dates);
+  } catch {
+    return res.status(400).json({ error: "countries/categories/dates, if provided, must be valid JSON objects keyed by filename" });
+  }
+
+  const countryByFilename = {};
+  const categoryByFilename = {};
+  const dateByFilename = {};
+  for (const file of req.files) {
+    const parsed = parseEmbeddedMetadata(file.buffer);
+    const country = countryOverrides[file.originalname] || parsed.country;
+    const category = categoryOverrides[file.originalname] || parsed.category;
+    const date = dateOverrides[file.originalname] || parsed.date;
+    if (country) countryByFilename[file.originalname] = country;
+    if (category) categoryByFilename[file.originalname] = category;
+    if (date) dateByFilename[file.originalname] = date;
+  }
+
+  const result = await kbClient.uploadBatch(
+    req.params.tenantId,
+    req.files.map((f) => ({ buffer: f.buffer, filename: f.originalname, mimeType: f.mimetype })),
+    { countryByFilename, categoryByFilename, dateByFilename, vectorDb: tenant.dataResidency }
+  );
   if (!result.ok) {
     return res.status(result.status === 503 ? 503 : 502).json({ error: result.error });
   }
