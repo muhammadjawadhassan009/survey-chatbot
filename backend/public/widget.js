@@ -95,8 +95,8 @@
   // ---------------------------------------------------------------------------
   var CSS = "\n" +
     "#ib-root { font-family: var(--ib-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);" +
-    " --ib-accent: #809a39; --ib-accent-dark: #4c7a24; --ib-accent-soft: #d8ddac;" +
-    " --ib-text: #205b16; --ib-text-soft: #4c7a24; --ib-border: #b7b64a; --ib-bg: #d8ddac;" +
+    " --ib-accent: #6C5CE7; --ib-accent-dark: #4B3FCC; --ib-accent-soft: #EEEAFF;" +
+    " --ib-text: #16162A; --ib-text-soft: #6B6B85; --ib-border: #E4E1FA; --ib-bg: #F7F6FE;" +
     " --ib-radius: 24px; --ib-side-right: 24px; --ib-side-left: auto; --ib-launcher-radius: 50%; }\n" +
     "#ib-root *, #ib-root *::before, #ib-root *::after { box-sizing: border-box; }\n" +
     "@keyframes ib-fade-scale-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }\n" +
@@ -112,18 +112,18 @@
     ".ib-panel.ib-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }\n" +
     ".ib-panel.ib-maximized { width: min(720px, 96vw); top: 20px; bottom: 20px; height: auto; }\n" +
     "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } }\n" +
-    ".ib-header { background: #fff; border-bottom: 1px solid var(--ib-border); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }\n" +
+    ".ib-header { background: linear-gradient(135deg, color-mix(in srgb, var(--ib-accent) 10%, white), #fff 60%); border-bottom: 1px solid var(--ib-border); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }\n" +
     ".ib-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }\n" +
     ".ib-logo { width: 24px; height: 24px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }\n" +
     ".ib-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ib-accent); flex-shrink: 0; box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ib-accent) 15%, transparent); }\n" +
-    ".ib-title { font-weight: 700; font-size: 14px; color: #000; letter-spacing: -.01em; }\n" +
+    ".ib-title { font-weight: 700; font-size: 14px; color: var(--ib-text); letter-spacing: -.01em; }\n" +
     ".ib-subtitle { font-size: 11px; color: var(--ib-text-soft); margin-top: 1px; }\n" +
     ".ib-header-actions { display: flex; align-items: center; gap: 1px; }\n" +
     ".ib-icon-btn { background: none; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all .15s ease; }\n" +
     ".ib-icon-btn:hover { color: var(--ib-text); background: var(--ib-accent-soft); }\n" +
     ".ib-icon-btn:active { transform: scale(.92); }\n" +
     ".ib-icon-btn svg { width: 16px; height: 16px; }\n" +
-    ".ib-messages { flex: 1; overflow-y: auto; padding: 20px 16px; background: var(--ib-bg); display: flex; flex-direction: column; gap: 8px; scroll-behavior: smooth; }\n" +
+    ".ib-messages { flex: 1; overflow-y: auto; padding: 20px 16px; background: linear-gradient(180deg, color-mix(in srgb, var(--ib-accent) 8%, white) 0%, #ffffff 260px); display: flex; flex-direction: column; gap: 8px; scroll-behavior: smooth; }\n" +
     ".ib-messages::-webkit-scrollbar { width: 5px; }\n" +
     ".ib-messages::-webkit-scrollbar-thumb { background: var(--ib-border); border-radius: 10px; }\n" +
     ".ib-row { display: flex; flex-direction: column; animation: ib-slide-up .25s cubic-bezier(.22,1,.36,1); }\n" +
@@ -206,8 +206,8 @@
     ".ib-history-new-chat-btn svg { width: 16px; height: 16px; }\n" +
     ".ib-chips-label { font-size: 12px; font-weight: 600; color: var(--ib-text-soft); margin: 4px 0 8px 2px; }\n" +
     ".ib-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }\n" +
-    ".ib-chip { font-size: 12px; font-weight: 500; background: #fff; color: var(--ib-text); border: 1px solid var(--ib-border); border-radius: 999px; padding: 8px 14px; cursor: pointer; transition: all .15s ease; }\n" +
-    ".ib-chip:hover { background: var(--ib-accent-soft); border-color: var(--ib-accent); color: #000; transform: translateY(-1px); box-shadow: 0 2px 8px color-mix(in srgb, var(--ib-text) 8%, transparent); }\n" +
+    ".ib-chip { font-size: 12px; font-weight: 500; background: var(--ib-accent-soft); color: var(--ib-accent-dark); border: 1px solid transparent; border-radius: 999px; padding: 8px 14px; cursor: pointer; transition: all .15s ease; }\n" +
+    ".ib-chip:hover { background: var(--ib-accent); border-color: var(--ib-accent); color: #fff; transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--ib-accent) 35%, transparent); }\n" +
     ".ib-chip:active { transform: translateY(0) scale(.97); }\n" +
     ".ib-typing-row { display: flex; align-items: center; gap: 8px; color: #000; font-size: 13px; font-weight: 500; }\n" +
     ".ib-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ib-accent); animation: ib-bounce 1.4s infinite ease-in-out; }\n" +
@@ -477,6 +477,7 @@
           els.subtitle.textContent = tenantConfig.subtitle;
           if (els.footnote && tenantConfig.footnote) els.footnote.textContent = tenantConfig.footnote;
           applyTheme(data.theme);
+          runCustomJs(data.theme);
         })
         .catch(function () {
           // No fake tenant-specific-looking content on failure — the widget
@@ -484,6 +485,42 @@
           // generic questions that may have nothing to do with this tenant.
           tenantConfig.suggestedQuestions = [];
         });
+    }
+
+    // Custom JS — the equivalent escape hatch to theme.customCss, for
+    // anything that isn't a visual style: adding an extra element, wiring
+    // up analytics, a "powered by" line, whatever a tenant's admin wants
+    // beyond what the structured config covers. Runs once per page load,
+    // after the config that would inform it (tenantId, theme) is already
+    // in place. Wrapped in try/catch so a broken snippet can't take the
+    // whole widget down — same trust model as customCss (set by whoever
+    // has admin access to this tenant, not by an end user chatting with
+    // the widget), but errors are still caught defensively since a JS
+    // exception is a lot more disruptive than a bad CSS rule would be.
+    function runCustomJs(theme) {
+      if (!theme || typeof theme.customJs !== "string" || !theme.customJs.trim()) return;
+      var api = {
+        root: root,
+        launcher: els.launcher,
+        panel: els.panel,
+        messages: els.messages,
+        tenantId: TENANT_ID,
+        sendMessage: function (text) { if (typeof text === "string" && text.trim()) sendMessage(text.trim()); },
+        open: function () { openPanel(); },
+        close: function () { closePanel(); },
+      };
+      try {
+        // eslint-disable-next-line no-new-func -- deliberate: this is the
+        // one field in the whole config schema that's meant to run
+        // arbitrary tenant-authored code, by design (see comment above).
+        var fn = new Function("ib", theme.customJs);
+        fn(api);
+      } catch (err) {
+        // Swallow rather than throw — a mistake in a tenant's custom
+        // snippet shouldn't break the chat widget itself. Still logged so
+        // it's discoverable from the browser console while debugging.
+        console.error("[Insight Bot] custom JS error:", err);
+      }
     }
 
     // -------------------------------------------------------------------
