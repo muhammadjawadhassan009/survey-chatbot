@@ -111,7 +111,18 @@
     ".ib-panel { position: fixed; bottom: 92px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999999; width: min(420px, 94vw); height: min(680px, 80vh); background: #ffffff; border-radius: var(--ib-radius); box-shadow: 0 24px 80px color-mix(in srgb, var(--ib-text) 12%, transparent), 0 0 0 1px color-mix(in srgb, var(--ib-text) 6%, transparent); display: flex; flex-direction: column; overflow: hidden; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(20px) scale(.96); transform-origin: bottom right; transition: opacity .25s ease, transform .25s cubic-bezier(.22,1,.36,1); }\n" +
     ".ib-panel.ib-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }\n" +
     ".ib-panel.ib-maximized { width: min(720px, 96vw); top: 20px; bottom: 20px; height: auto; }\n" +
-    "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } }\n" +
+    "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } .ib-teaser { display: none; } }\n" +
+    // Proactive teaser bubble — the "line outside the box before opening"
+    // pattern popular chat widgets (Intercom/Fin, Drift, etc.) use to
+    // invite a click instead of waiting passively for one. Positioned via
+    // the same --ib-side-right/--ib-side-left vars as the launcher/panel
+    // so it correctly follows a tenant's chosen corner.
+    ".ib-teaser { position: fixed; bottom: 96px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999998; max-width: 240px; background: #fff; color: var(--ib-text); border: 1px solid var(--ib-border); border-radius: 16px; padding: 12px 32px 12px 14px; font-size: 13px; line-height: 1.4; box-shadow: 0 12px 32px color-mix(in srgb, var(--ib-text) 14%, transparent); cursor: pointer; opacity: 0; transform: translateY(8px) scale(.96); transition: opacity .3s ease, transform .3s cubic-bezier(.22,1,.36,1); pointer-events: none; }\n" +
+    ".ib-teaser.ib-teaser-visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }\n" +
+    ".ib-teaser::after { content: ''; position: absolute; bottom: -7px; right: 26px; left: auto; width: 14px; height: 14px; background: #fff; border-right: 1px solid var(--ib-border); border-bottom: 1px solid var(--ib-border); transform: rotate(45deg); }\n" +
+    ".ib-teaser.ib-pos-left::after { right: auto; left: 26px; }\n" +
+    ".ib-teaser-close { position: absolute; top: 6px; right: 8px; width: 18px; height: 18px; border: none; background: none; color: var(--ib-text-soft); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }\n" +
+    ".ib-teaser-close:hover { background: color-mix(in srgb, var(--ib-text) 8%, transparent); }\n" +
     ".ib-header { background: linear-gradient(135deg, color-mix(in srgb, var(--ib-accent) 10%, white), #fff 60%); border-bottom: 1px solid var(--ib-border); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }\n" +
     ".ib-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }\n" +
     ".ib-logo { width: 24px; height: 24px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }\n" +
@@ -246,6 +257,10 @@
     var root = document.createElement("div");
     root.id = "ib-root";
     root.innerHTML =
+      '<div class="ib-teaser" id="ib-teaser">' +
+        '<button class="ib-teaser-close" id="ib-teaser-close" aria-label="Dismiss">&times;</button>' +
+        '<span id="ib-teaser-text"></span>' +
+      "</div>" +
       '<button class="ib-launcher ib-attention" id="ib-launcher" aria-label="Open chat">' + ICON_CHAT + "</button>" +
       '<div class="ib-panel" id="ib-panel">' +
         '<div class="ib-header">' +
@@ -296,6 +311,9 @@
   // ---------------------------------------------------------------------------
   function initWidget() {
     var els = {
+      teaser: document.getElementById("ib-teaser"),
+      teaserText: document.getElementById("ib-teaser-text"),
+      teaserClose: document.getElementById("ib-teaser-close"),
       launcher: document.getElementById("ib-launcher"),
       panel: document.getElementById("ib-panel"),
       closeBtn: document.getElementById("ib-close-btn"),
@@ -478,6 +496,7 @@
           if (els.footnote && tenantConfig.footnote) els.footnote.textContent = tenantConfig.footnote;
           applyTheme(data.theme);
           runCustomJs(data.theme);
+          showTeaser(data.theme);
         })
         .catch(function () {
           // No fake tenant-specific-looking content on failure — the widget
@@ -523,6 +542,45 @@
       }
     }
 
+    // Proactive teaser bubble — see the CSS comment above for what this
+    // is. Dismissal (via the × or by clicking through to open the panel)
+    // is remembered in localStorage per-tenant so it doesn't nag on every
+    // page load once someone's already seen/dismissed it. Falls back to
+    // "just show it, don't persist" if localStorage is unavailable
+    // (private browsing, cross-origin iframe restrictions, etc.) rather
+    // than failing loudly over a non-essential feature.
+    function teaserStorageKey() { return "ib-teaser-dismissed-" + TENANT_ID; }
+    function isTeaserDismissed() {
+      try { return localStorage.getItem(teaserStorageKey()) === "1"; } catch (e) { return false; }
+    }
+    function dismissTeaser(persist) {
+      els.teaser.classList.remove("ib-teaser-visible");
+      if (persist) {
+        try { localStorage.setItem(teaserStorageKey(), "1"); } catch (e) { /* non-essential, ignore */ }
+      }
+    }
+    function showTeaser(theme) {
+      var text = theme && typeof theme.teaserText === "string" ? theme.teaserText.trim() : "";
+      if (!text || isTeaserDismissed()) return;
+      els.teaserText.textContent = text;
+      els.teaser.classList.toggle("ib-pos-left", theme.position === "bottom-left");
+      var delay = typeof theme.teaserDelayMs === "number" && theme.teaserDelayMs >= 0 ? theme.teaserDelayMs : 1500;
+      setTimeout(function () {
+        // Don't pop up over a conversation the visitor already started on
+        // their own during the delay window.
+        if (els.panel.classList.contains("ib-open")) return;
+        els.teaser.classList.add("ib-teaser-visible");
+      }, delay);
+    }
+    els.teaserClose.addEventListener("click", function (e) {
+      e.stopPropagation();
+      dismissTeaser(true);
+    });
+    els.teaser.addEventListener("click", function () {
+      dismissTeaser(true);
+      openPanel();
+    });
+
     // -------------------------------------------------------------------
     // Open / close / minimize / maximize
     // -------------------------------------------------------------------
@@ -534,6 +592,7 @@
       els.maximizeBtn.innerHTML = ICON_MAXIMIZE;
       els.maximizeBtn.title = "Maximize";
       els.input.focus();
+      dismissTeaser(false); // hide (not permanently dismiss) whenever the panel opens by any route
       if (!panelOpenedOnce) {
         panelOpenedOnce = true;
         restoreOrStartChat();
