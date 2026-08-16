@@ -76,6 +76,10 @@
           <label class="status-line">Logo URL (optional — shown in the widget header, https:// only)</label>
           <input type="text" id="themeLogoUrl" class="mono" placeholder="https://example.com/logo.png" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
         </div>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
+          <label class="status-line">Teaser message (optional — a small bubble that pops up next to the launcher before it's opened, inviting a click. Leave blank to disable.)</label>
+          <input type="text" id="themeTeaserText" placeholder="Ask me anything about our research 👋" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
+        </div>
         <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:10px; margin-bottom:12px;">
           <div style="display:flex; flex-direction:column; gap:4px;">
             <label class="status-line">Font family</label>
@@ -376,8 +380,13 @@ function renderThemeRows(theme) {
     logoInput.dataset.bound = "1";
     logoInput.addEventListener("input", () => syncStructuredToJson());
   }
-  const fontInput = document.getElementById("themeFontFamily");
-  fontInput.value = typeof theme.fontFamily === "string" ? theme.fontFamily : "";
+  const teaserInput = document.getElementById("themeTeaserText");
+  teaserInput.value = typeof theme.teaserText === "string" ? theme.teaserText : "";
+  if (!teaserInput.dataset.bound) {
+    teaserInput.dataset.bound = "1";
+    teaserInput.addEventListener("input", () => syncStructuredToJson());
+  }
+  const fontInput = document.getElementById("themeFontFamily");  fontInput.value = typeof theme.fontFamily === "string" ? theme.fontFamily : "";
   if (!fontInput.dataset.bound) {
     fontInput.dataset.bound = "1";
     fontInput.addEventListener("input", () => syncStructuredToJson());
@@ -445,6 +454,8 @@ function readThemeFromDom() {
   });
   const logoUrl = (document.getElementById("themeLogoUrl").value || "").trim();
   if (/^https:\/\//i.test(logoUrl)) theme.imageUrl = logoUrl;
+  const teaserText = (document.getElementById("themeTeaserText").value || "").trim();
+  if (teaserText) theme.teaserText = teaserText;
   const fontFamily = (document.getElementById("themeFontFamily").value || "").trim();
   if (fontFamily) theme.fontFamily = fontFamily;
   const radiusRaw = document.getElementById("themeBorderRadius").value;
