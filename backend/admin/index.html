@@ -71,7 +71,7 @@
           <strong style="font-size:12.5px;">Branding / theme</strong>
           <button id="clearThemeBtn">Reset to defaults</button>
         </div>
-        <div class="status-line" style="margin-bottom:8px;">Overrides the widget's default colors, font, corner roundness, and which bottom corner it docks in. A few elements (some shadows) still aren't wired to this yet.</div>
+        <div class="status-line" style="margin-bottom:8px;">Overrides the widget's default colors, font, corner roundness, launcher shape, position, and (via custom CSS) anything else — every color and shadow in the widget now tracks these, nothing is hardcoded anymore. Custom CSS is scoped to the widget only via a real browser feature (CSS <span class="mono">@scope</span>) so it can't leak out and restyle your site — falls back to being ignored (not broken) on the small share of older browsers that don't support @scope yet.</div>
         <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
           <label class="status-line">Logo URL (optional — shown in the widget header, https:// only)</label>
           <input type="text" id="themeLogoUrl" class="mono" placeholder="https://example.com/logo.png" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
@@ -93,6 +93,19 @@
               <option value="bottom-left">Bottom-left</option>
             </select>
           </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <label class="status-line">Launcher button shape</label>
+            <select id="themeLauncherShape" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;">
+              <option value="">Default (circle)</option>
+              <option value="circle">Circle</option>
+              <option value="rounded-square">Rounded square</option>
+              <option value="square">Square</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
+          <label class="status-line">Custom CSS (advanced — scoped to the widget only, applies after everything above)</label>
+          <textarea id="themeCustomCss" class="mono" rows="5" placeholder=".ib-bubble-bot { border: 2px dashed var(--ib-accent); }" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:11.5px; resize:vertical;"></textarea>
         </div>
         <div id="themeRows" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px;"></div>
       </div>
@@ -377,6 +390,19 @@ function renderThemeRows(theme) {
     positionSelect.dataset.bound = "1";
     positionSelect.addEventListener("change", () => syncStructuredToJson());
   }
+  const shapeSelect = document.getElementById("themeLauncherShape");
+  const validShapes = ["circle", "rounded-square", "square"];
+  shapeSelect.value = validShapes.includes(theme.launcherShape) ? theme.launcherShape : "";
+  if (!shapeSelect.dataset.bound) {
+    shapeSelect.dataset.bound = "1";
+    shapeSelect.addEventListener("change", () => syncStructuredToJson());
+  }
+  const customCssInput = document.getElementById("themeCustomCss");
+  customCssInput.value = typeof theme.customCss === "string" ? theme.customCss : "";
+  if (!customCssInput.dataset.bound) {
+    customCssInput.dataset.bound = "1";
+    customCssInput.addEventListener("input", () => syncStructuredToJson());
+  }
   const el = document.getElementById("themeRows");
   el.innerHTML = "";
   const hexPattern = /^#[0-9a-fA-F]{6}$/;
@@ -415,6 +441,10 @@ function readThemeFromDom() {
   if (radiusRaw !== "" && !isNaN(Number(radiusRaw))) theme.borderRadius = Number(radiusRaw);
   const position = document.getElementById("themePosition").value;
   if (position === "bottom-left" || position === "bottom-right") theme.position = position;
+  const launcherShape = document.getElementById("themeLauncherShape").value;
+  if (["circle", "rounded-square", "square"].includes(launcherShape)) theme.launcherShape = launcherShape;
+  const customCss = (document.getElementById("themeCustomCss").value || "").trim();
+  if (customCss) theme.customCss = customCss;
   return theme;
 }
 
