@@ -37,6 +37,11 @@
       <div style="display:flex; gap:8px;">
         <select id="tenantPicker"><option value="">Select tenant…</option></select>
         <button id="newTenantBtn">+ New tenant</button>
+        <span id="newTenantInline" style="display:none; gap:6px; align-items:center;">
+          <input type="text" id="newTenantIdInput" placeholder="tenant-id (letters, numbers, - and _)" style="width:220px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:13px;" />
+          <button id="newTenantConfirmBtn" class="primary">Create</button>
+          <button id="newTenantCancelBtn">Cancel</button>
+        </span>
       </div>
     </div>
     <div class="panel-body">
@@ -66,10 +71,28 @@
           <strong style="font-size:12.5px;">Branding / theme</strong>
           <button id="clearThemeBtn">Reset to defaults</button>
         </div>
-        <div class="status-line" style="margin-bottom:8px;">Overrides the widget's default colors. Covers borders, message backgrounds, and soft text — a few elements (the launcher button, some shadows) aren't wired to this yet.</div>
+        <div class="status-line" style="margin-bottom:8px;">Overrides the widget's default colors, font, corner roundness, and which bottom corner it docks in. A few elements (some shadows) still aren't wired to this yet.</div>
         <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
           <label class="status-line">Logo URL (optional — shown in the widget header, https:// only)</label>
           <input type="text" id="themeLogoUrl" class="mono" placeholder="https://example.com/logo.png" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
+        </div>
+        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:10px; margin-bottom:12px;">
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <label class="status-line">Font family</label>
+            <input type="text" id="themeFontFamily" class="mono" placeholder="e.g. Georgia, serif" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <label class="status-line">Corner roundness (0–40px)</label>
+            <input type="number" id="themeBorderRadius" min="0" max="40" placeholder="24" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <label class="status-line">Widget position</label>
+            <select id="themePosition" style="background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:11.5px;">
+              <option value="">Default (bottom-right)</option>
+              <option value="bottom-right">Bottom-right</option>
+              <option value="bottom-left">Bottom-left</option>
+            </select>
+          </div>
         </div>
         <div id="themeRows" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px;"></div>
       </div>
@@ -336,6 +359,24 @@ function renderThemeRows(theme) {
     logoInput.dataset.bound = "1";
     logoInput.addEventListener("input", () => syncStructuredToJson());
   }
+  const fontInput = document.getElementById("themeFontFamily");
+  fontInput.value = typeof theme.fontFamily === "string" ? theme.fontFamily : "";
+  if (!fontInput.dataset.bound) {
+    fontInput.dataset.bound = "1";
+    fontInput.addEventListener("input", () => syncStructuredToJson());
+  }
+  const radiusInput = document.getElementById("themeBorderRadius");
+  radiusInput.value = typeof theme.borderRadius === "number" ? theme.borderRadius : "";
+  if (!radiusInput.dataset.bound) {
+    radiusInput.dataset.bound = "1";
+    radiusInput.addEventListener("input", () => syncStructuredToJson());
+  }
+  const positionSelect = document.getElementById("themePosition");
+  positionSelect.value = theme.position === "bottom-left" || theme.position === "bottom-right" ? theme.position : "";
+  if (!positionSelect.dataset.bound) {
+    positionSelect.dataset.bound = "1";
+    positionSelect.addEventListener("change", () => syncStructuredToJson());
+  }
   const el = document.getElementById("themeRows");
   el.innerHTML = "";
   const hexPattern = /^#[0-9a-fA-F]{6}$/;
@@ -368,6 +409,12 @@ function readThemeFromDom() {
   });
   const logoUrl = (document.getElementById("themeLogoUrl").value || "").trim();
   if (/^https:\/\//i.test(logoUrl)) theme.imageUrl = logoUrl;
+  const fontFamily = (document.getElementById("themeFontFamily").value || "").trim();
+  if (fontFamily) theme.fontFamily = fontFamily;
+  const radiusRaw = document.getElementById("themeBorderRadius").value;
+  if (radiusRaw !== "" && !isNaN(Number(radiusRaw))) theme.borderRadius = Number(radiusRaw);
+  const position = document.getElementById("themePosition").value;
+  if (position === "bottom-left" || position === "bottom-right") theme.position = position;
   return theme;
 }
 
@@ -600,10 +647,38 @@ document.getElementById("regenerateKeyBtn").addEventListener("click", async () =
 });
 
 document.getElementById("newTenantBtn").addEventListener("click", () => {
-  const id = prompt("New tenant id (letters, numbers, - and _ only):");
-  if (!id) return;
+  document.getElementById("newTenantBtn").style.display = "none";
+  const inline = document.getElementById("newTenantInline");
+  inline.style.display = "inline-flex";
+  const input = document.getElementById("newTenantIdInput");
+  input.value = "";
+  input.focus();
+});
+
+document.getElementById("newTenantCancelBtn").addEventListener("click", () => {
+  document.getElementById("newTenantInline").style.display = "none";
+  document.getElementById("newTenantBtn").style.display = "";
+});
+
+function createNewTenant() {
+  const raw = document.getElementById("newTenantIdInput").value;
+  const id = (raw || "").trim();
+  const status = document.getElementById("editorStatus");
+  if (!id) {
+    status.textContent = "Enter a tenant id first.";
+    status.className = "status-line err";
+    return;
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    status.textContent = "Tenant id can only contain letters, numbers, - and _.";
+    status.className = "status-line err";
+    return;
+  }
+  document.getElementById("newTenantInline").style.display = "none";
+  document.getElementById("newTenantBtn").style.display = "";
+
   const editor = document.getElementById("tenantEditor");
-  editor.dataset.id = id.trim();
+  editor.dataset.id = id;
   editor.value = JSON.stringify({
     tenant_meta: {
       widget_title: "Insight Bot",
@@ -629,8 +704,16 @@ document.getElementById("newTenantBtn").addEventListener("click", () => {
     survey_meta: { title: "" }
   }, null, 2);
   document.getElementById("tenantPicker").value = "";
-  document.getElementById("editorStatus").textContent = `Creating new tenant "${id.trim()}" — edit below, then Save.`;
+  status.textContent = `Creating new tenant "${id}" — edit below, then Save.`;
+  status.className = "status-line";
   syncJsonToStructured();
+  editor.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+document.getElementById("newTenantConfirmBtn").addEventListener("click", createNewTenant);
+document.getElementById("newTenantIdInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") createNewTenant();
+  if (e.key === "Escape") document.getElementById("newTenantCancelBtn").click();
 });
 
 document.getElementById("saveTenantBtn").addEventListener("click", async () => {
