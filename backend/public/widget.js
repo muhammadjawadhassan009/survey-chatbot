@@ -664,7 +664,7 @@
       var introBubble = document.createElement("div");
       introBubble.className = "ib-intro-bubble";
       var greetText = (tenantConfig && tenantConfig.subtitle)
-        ? "\uD83D\uDC4B Hello! I am your " + tenantConfig.subtitle + ". Ask me about " + (tenantConfig.title || "our") + "'s data."
+        ? "\uD83D\uDC4B Hello! I am your " + tenantConfig.subtitle + ". Ask me about " + (tenantConfig.title || "our") + "'s."
         : "\uD83D\uDC4B Hello! I am your Research Assistant. Ask me a question about the data.";
       introBubble.textContent = greetText;
       introRow.appendChild(introBubble);
@@ -699,7 +699,7 @@
       maybeAutoScroll();
     }
 
-    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior consultant 💭..."];
+    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior researcher 💭...", "Compiling dataset 📈... ", "Parsing metadata 📁... "];
     function typingIndicator() {
       var bubble = createRow("bot");
       bubble.innerHTML =
