@@ -49,6 +49,20 @@
 
       <div style="border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <strong style="font-size:12.5px;">Voice & instructions</strong>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
+          <label class="status-line">Persona / voice (optional — a few sentences on tone. Added on top of the built-in prompt, doesn't replace it.)</label>
+          <textarea id="personaInput" rows="3" placeholder="e.g. Warm and plain-spoken, avoid jargon, keep answers under 3 sentences unless asked for detail." style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12.5px; resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label class="status-line">Custom instructions (advanced — <strong>replaces</strong> the entire built-in survey-analyst prompt, including the citation-grounding and research-domain-boundary rules. Leave blank unless you specifically need full control over the model's behavior.)</label>
+          <textarea id="masterPromptInput" rows="4" placeholder="Leave blank to use the built-in survey/research-analyst prompt (recommended)." style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12.5px; resize:vertical;"></textarea>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
           <strong style="font-size:12.5px;">Embed snippet</strong>
           <button id="regenerateKeyBtn">Regenerate key</button>
         </div>
@@ -110,6 +124,24 @@
         <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
           <label class="status-line">Custom CSS (advanced — scoped to the widget only, applies after everything above)</label>
           <textarea id="themeCustomCss" class="mono" rows="5" placeholder=".ib-bubble-bot { border: 2px dashed var(--ib-accent); }" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:11.5px; resize:vertical;"></textarea>
+          <details style="margin-top:4px;">
+            <summary class="status-line" style="cursor:pointer;">Class name reference (what to actually type)</summary>
+            <table style="width:100%; margin-top:6px; font-size:11px; border-collapse:collapse;">
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-launcher</td><td class="status-line">The floating round button before it's opened</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-panel</td><td class="status-line">The whole chat window</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-header</td><td class="status-line">Top bar with the title/logo</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-title / .ib-subtitle</td><td class="status-line">Header text</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-messages</td><td class="status-line">The scrolling conversation area</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-bubble-user</td><td class="status-line">The visitor's own message bubbles</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-bubble-bot</td><td class="status-line">The chatbot's reply bubbles</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-chip</td><td class="status-line">"Try asking" suggested-question pills</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-textarea</td><td class="status-line">The message input box</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-send-btn</td><td class="status-line">The send button</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-footnote</td><td class="status-line">The small "grounded to..." line at the bottom</td></tr>
+              <tr><td class="mono" style="padding:3px 8px 3px 0; white-space:nowrap;">.ib-teaser</td><td class="status-line">The pop-up bubble before opening (if enabled above)</td></tr>
+            </table>
+            <div class="status-line" style="margin-top:6px;">Also available as CSS variables inside any rule: <span class="mono">var(--ib-accent)</span>, <span class="mono">var(--ib-accent-dark)</span>, <span class="mono">var(--ib-accent-soft)</span>, <span class="mono">var(--ib-text)</span>, <span class="mono">var(--ib-text-soft)</span>, <span class="mono">var(--ib-border)</span>, <span class="mono">var(--ib-bg)</span> — these track whatever you set in the color fields above, so a custom rule stays in sync if you change those later instead of hardcoding a color that'll drift out of sync.</div>
+          </details>
         </div>
         <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:12px;">
           <label class="status-line">Custom JS (advanced — for anything beyond styling: extra elements, analytics, a "powered by" line, etc. Runs once on load with an <span class="mono">ib</span> object: <span class="mono">ib.root</span>, <span class="mono">ib.panel</span>, <span class="mono">ib.messages</span>, <span class="mono">ib.sendMessage(text)</span>, <span class="mono">ib.open()</span>, <span class="mono">ib.close()</span>.)</label>
@@ -302,13 +334,13 @@ async function loadTenantPicker() {
 // just a friendlier way to edit two specific arrays inside it. ---
 
 const THEME_KEYS = [
-  { key: "accent", label: "Accent" },
-  { key: "accentDark", label: "Accent (dark)" },
-  { key: "accentSoft", label: "Accent (soft)" },
-  { key: "text", label: "Text" },
-  { key: "textSoft", label: "Text (soft)" },
-  { key: "border", label: "Border" },
-  { key: "bg", label: "Background" },
+  { key: "accent", label: "Your chat bubble & buttons" },
+  { key: "accentDark", label: "Button gradient (darker shade)" },
+  { key: "accentSoft", label: "Light fills (chip backgrounds, hover)" },
+  { key: "text", label: "Bot's chat bubble text" },
+  { key: "textSoft", label: "Secondary text (footnote, placeholders)" },
+  { key: "border", label: "Borders & dividers" },
+  { key: "bg", label: "Input box background" },
 ];
 
 function getStructuredFromJsonText(jsonText) {
@@ -325,13 +357,15 @@ function getStructuredFromJsonText(jsonText) {
         models: Array.isArray(parsed.tenant_meta?.provider?.models) ? parsed.tenant_meta.provider.models : [],
         apiKeyEnv: typeof parsed.tenant_meta?.provider?.apiKeyEnv === "string" ? parsed.tenant_meta.provider.apiKeyEnv : "",
       },
+      persona: typeof parsed.tenant_meta?.persona === "string" ? parsed.tenant_meta.persona : "",
+      masterPrompt: typeof parsed.tenant_meta?.masterPrompt === "string" ? parsed.tenant_meta.masterPrompt : "",
     };
   } catch {
-    return { questions: [], fields: [], theme: {}, offices: [], researchDomains: [], dataResidency: {}, provider: { models: [], apiKeyEnv: "" } };
+    return { questions: [], fields: [], theme: {}, offices: [], researchDomains: [], dataResidency: {}, provider: { models: [], apiKeyEnv: "" }, persona: "", masterPrompt: "" };
   }
 }
 
-function applyStructuredToJsonText(jsonText, questions, fields, theme, offices, researchDomains, dataResidency, provider) {
+function applyStructuredToJsonText(jsonText, questions, fields, theme, offices, researchDomains, dataResidency, provider, persona, masterPrompt) {
   let parsed;
   try {
     parsed = JSON.parse(jsonText);
@@ -343,6 +377,10 @@ function applyStructuredToJsonText(jsonText, questions, fields, theme, offices, 
   parsed.tenant_meta = parsed.tenant_meta && typeof parsed.tenant_meta === "object" ? parsed.tenant_meta : {};
   parsed.tenant_meta.booking = parsed.tenant_meta.booking && typeof parsed.tenant_meta.booking === "object" ? parsed.tenant_meta.booking : {};
   parsed.tenant_meta.booking.fields = fields;
+  if (persona) parsed.tenant_meta.persona = persona;
+  else delete parsed.tenant_meta.persona;
+  if (masterPrompt) parsed.tenant_meta.masterPrompt = masterPrompt;
+  else delete parsed.tenant_meta.masterPrompt;
   parsed.tenant_meta.branding = parsed.tenant_meta.branding && typeof parsed.tenant_meta.branding === "object" ? parsed.tenant_meta.branding : {};
   if (theme && Object.keys(theme).length) parsed.tenant_meta.branding.theme = theme;
   else delete parsed.tenant_meta.branding.theme;
@@ -583,12 +621,14 @@ function readDataResidencyFromDom() {
 
 function syncStructuredToJson() {
   const editor = document.getElementById("tenantEditor");
-  editor.value = applyStructuredToJsonText(editor.value, readQuestionsFromDom(), readFieldsFromDom(), readThemeFromDom(), readOfficesFromDom(), readResearchDomainsFromDom(), readDataResidencyFromDom(), readProviderFromDom());
+  const persona = document.getElementById("personaInput").value;
+  const masterPrompt = document.getElementById("masterPromptInput").value;
+  editor.value = applyStructuredToJsonText(editor.value, readQuestionsFromDom(), readFieldsFromDom(), readThemeFromDom(), readOfficesFromDom(), readResearchDomainsFromDom(), readDataResidencyFromDom(), readProviderFromDom(), persona, masterPrompt);
 }
 
 function syncJsonToStructured() {
   const editor = document.getElementById("tenantEditor");
-  const { questions, fields, theme, offices, researchDomains, dataResidency, provider } = getStructuredFromJsonText(editor.value || "{}");
+  const { questions, fields, theme, offices, researchDomains, dataResidency, provider, persona, masterPrompt } = getStructuredFromJsonText(editor.value || "{}");
   renderQuestionRows(questions);
   renderFieldRows(fields);
   renderThemeRows(theme);
@@ -600,7 +640,12 @@ function syncJsonToStructured() {
   document.getElementById("residencyQdrantCollection").value = dataResidency.qdrantCollection || "";
   document.getElementById("providerModelsInput").value = (provider.models || []).join(", ");
   document.getElementById("providerApiKeyEnvInput").value = provider.apiKeyEnv || "";
+  document.getElementById("personaInput").value = persona || "";
+  document.getElementById("masterPromptInput").value = masterPrompt || "";
 }
+
+document.getElementById("personaInput").addEventListener("input", syncStructuredToJson);
+document.getElementById("masterPromptInput").addEventListener("input", syncStructuredToJson);
 
 document.getElementById("addQuestionBtn").addEventListener("click", () => {
   const questions = readQuestionsFromDom();
