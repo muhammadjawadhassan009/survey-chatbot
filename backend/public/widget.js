@@ -18,6 +18,20 @@
   var THIS_SCRIPT = document.currentScript;
   var API_BASE = (THIS_SCRIPT && THIS_SCRIPT.dataset.apiBase) || (THIS_SCRIPT ? new URL(THIS_SCRIPT.src, window.location.href).origin : window.location.origin);
   var TENANT_ID = (THIS_SCRIPT && THIS_SCRIPT.dataset.tenant) || "default";
+  // Unique per script-tag instance, not per tenant — if the same tenant's
+  // widget is (accidentally or deliberately) embedded twice on one page,
+  // or two different tenants' widgets end up on the same page (a test/
+  // staging page, say), each instance still gets its own uniquely-ID'd
+  // root element. Without this, every instance would share the literal
+  // id="ib-root", and since CSS ID selectors match ALL elements with that
+  // id (duplicate ids are invalid HTML, but browsers still apply matching
+  // rules to every match, not just the first), the LAST instance's
+  // "#ib-root#ib-root { --ib-accent: ... }" theme-override rule would win
+  // and apply to every instance's root, not just its own — the exact
+  // "one tenant's config affecting another" symptom this fixes.
+  var INSTANCE_ID = TENANT_ID.replace(/[^a-zA-Z0-9_-]/g, "") + "-" + Math.random().toString(36).slice(2, 8);
+  var ROOT_ID = "ib-root-" + INSTANCE_ID;
+  var root; // set by buildMarkup(), read by initWidget() and getChartColors() — hoisted here (not `var`-declared inside either) since they're sibling functions in this IIFE, not nested within each other.
   // Sent as X-Widget-Key on every public request — NOT a true secret (it's
   // sitting right here in this page's HTML source), but lets the backend
   // apply per-tenant rate-limit/abuse handling and revoke/rotate one
@@ -94,11 +108,11 @@
   // Styles — modern, minimalist, CSS-variable-driven for easy theming
   // ---------------------------------------------------------------------------
   var CSS = "\n" +
-    "#ib-root { font-family: var(--ib-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);" +
+    ".ib-root { font-family: var(--ib-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);" +
     " --ib-accent: #6C5CE7; --ib-accent-dark: #4B3FCC; --ib-accent-soft: #EEEAFF;" +
     " --ib-text: #16162A; --ib-text-soft: #6B6B85; --ib-border: #E4E1FA; --ib-bg: #F7F6FE;" +
     " --ib-radius: 24px; --ib-side-right: 24px; --ib-side-left: auto; --ib-launcher-radius: 50%; }\n" +
-    "#ib-root *, #ib-root *::before, #ib-root *::after { box-sizing: border-box; }\n" +
+    ".ib-root *, .ib-root *::before, .ib-root *::after { box-sizing: border-box; }\n" +
     "@keyframes ib-fade-scale-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }\n" +
     "@keyframes ib-msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }\n" +
     "@keyframes ib-pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ib-text) 35%, transparent); } 70% { box-shadow: 0 0 0 12px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }\n" +
@@ -254,8 +268,9 @@
     var ICON_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>';
 
   function buildMarkup() {
-    var root = document.createElement("div");
-    root.id = "ib-root";
+    root = document.createElement("div");
+    root.id = ROOT_ID;
+    root.className = "ib-root";
     root.innerHTML =
       '<div class="ib-teaser" id="ib-teaser">' +
         '<button class="ib-teaser-close" id="ib-teaser-close" aria-label="Dismiss">&times;</button>' +
@@ -311,26 +326,26 @@
   // ---------------------------------------------------------------------------
   function initWidget() {
     var els = {
-      teaser: document.getElementById("ib-teaser"),
-      teaserText: document.getElementById("ib-teaser-text"),
-      teaserClose: document.getElementById("ib-teaser-close"),
-      launcher: document.getElementById("ib-launcher"),
-      panel: document.getElementById("ib-panel"),
-      closeBtn: document.getElementById("ib-close-btn"),
-      maximizeBtn: document.getElementById("ib-maximize-btn"),
-      newChatBtn: document.getElementById("ib-newchat-btn"),
-      historyBtn: document.getElementById("ib-history-btn"),
-      historyPage: document.getElementById("ib-history-page"),
-      historyList: document.getElementById("ib-history-list"),
-      historyBackBtn: document.getElementById("ib-history-back-btn"),
-      historyNewChatBtn: document.getElementById("ib-history-new-chat-btn"),
-      messages: document.getElementById("ib-messages"),
-      scrollDownBtn: document.getElementById("ib-scroll-down-btn"),
-      input: document.getElementById("ib-input"),
-      sendBtn: document.getElementById("ib-send-btn"),
-      title: document.getElementById("ib-title"),
-      subtitle: document.getElementById("ib-subtitle"),
-      footnote: document.getElementById("ib-footnote"),
+      teaser: root.querySelector("#ib-teaser"),
+      teaserText: root.querySelector("#ib-teaser-text"),
+      teaserClose: root.querySelector("#ib-teaser-close"),
+      launcher: root.querySelector("#ib-launcher"),
+      panel: root.querySelector("#ib-panel"),
+      closeBtn: root.querySelector("#ib-close-btn"),
+      maximizeBtn: root.querySelector("#ib-maximize-btn"),
+      newChatBtn: root.querySelector("#ib-newchat-btn"),
+      historyBtn: root.querySelector("#ib-history-btn"),
+      historyPage: root.querySelector("#ib-history-page"),
+      historyList: root.querySelector("#ib-history-list"),
+      historyBackBtn: root.querySelector("#ib-history-back-btn"),
+      historyNewChatBtn: root.querySelector("#ib-history-new-chat-btn"),
+      messages: root.querySelector("#ib-messages"),
+      scrollDownBtn: root.querySelector("#ib-scroll-down-btn"),
+      input: root.querySelector("#ib-input"),
+      sendBtn: root.querySelector("#ib-send-btn"),
+      title: root.querySelector("#ib-title"),
+      subtitle: root.querySelector("#ib-subtitle"),
+      footnote: root.querySelector("#ib-footnote"),
     };
 
     var conversation = [];
@@ -376,7 +391,7 @@
 
       // Logo — independent of the color overrides below, so a tenant can
       // set just a logo without needing to also override every color.
-      var logoEl = document.getElementById("ib-logo");
+      var logoEl = root.querySelector("#ib-logo");
       if (logoEl) {
         var imageUrl = typeof theme.imageUrl === "string" ? theme.imageUrl.trim() : "";
         var isSafeImageUrl = /^https:\/\//i.test(imageUrl); // https-only: this loads on every tenant's site, no mixed-content/plain-http exceptions
@@ -445,12 +460,15 @@
 
       if (!declarations.length) return;
 
-      var existing = document.getElementById("ib-theme-override");
+      var overrideId = "ib-theme-override-" + INSTANCE_ID;
+      var existing = document.getElementById(overrideId);
       var styleEl = existing || document.createElement("style");
-      styleEl.id = "ib-theme-override";
-      // Higher specificity than the base "#ib-root { ... }" rule below it
-      // in the document, so these win without needing !important.
-      styleEl.textContent = "#ib-root#ib-root { " + declarations.join("; ") + "; }";
+      styleEl.id = overrideId;
+      // Targets THIS instance's unique root id, not a shared "#ib-root" —
+      // see the INSTANCE_ID comment near the top of the file for why a
+      // shared id here is exactly what would let one tenant's theme
+      // override apply to a different tenant's widget on the same page.
+      styleEl.textContent = "#" + ROOT_ID + "#" + ROOT_ID + " { " + declarations.join("; ") + "; }";
       if (!existing) document.head.appendChild(styleEl);
 
       // Custom CSS — deliberately raw, unlike every field above. This is
@@ -465,18 +483,21 @@
       // against a pasted snippet that accidentally contains one of these
       // rather than a deliberately malicious admin (who has plenty of
       // other ways to cause damage with legitimate admin access anyway).
-      var customCssEl = document.getElementById("ib-theme-custom-css");
+      var customCssId = "ib-theme-custom-css-" + INSTANCE_ID;
+      var customCssEl = document.getElementById(customCssId);
       if (typeof theme.customCss === "string" && theme.customCss.trim()) {
         var safeCss = theme.customCss.replace(/<\/style/gi, "").replace(/<script/gi, "");
         var el = customCssEl || document.createElement("style");
-        el.id = "ib-theme-custom-css";
-        // @scope confines every selector inside to #ib-root's own subtree
+        el.id = customCssId;
+        // @scope confines every selector inside to THIS instance's own
+        // root subtree (unique per-instance id, same reasoning as above)
         // — a tenant writing "body { ... }" or ".ib-bubble-bot { ... }"
-        // only ever affects the widget itself, never the host page around
-        // it. This is a real CSS feature (not a hand-rolled selector
-        // rewrite), so nesting/media queries/pseudo-selectors in the
-        // tenant's CSS all keep working normally inside the scope.
-        el.textContent = "@scope (#ib-root) {\n" + safeCss + "\n}";
+        // only ever affects its own widget instance, never the host page
+        // or a different tenant's widget instance on the same page. This
+        // is a real CSS feature (not a hand-rolled selector rewrite), so
+        // nesting/media queries/pseudo-selectors in the tenant's CSS all
+        // keep working normally inside the scope.
+        el.textContent = "@scope (#" + ROOT_ID + ") {\n" + safeCss + "\n}";
         if (!customCssEl) document.head.appendChild(el);
       } else if (customCssEl) {
         customCssEl.remove();
@@ -913,17 +934,16 @@
     // datasets beyond what the theme colors alone can distinguish.
     var CHART_COLORS_FIXED_TAIL = ["#0a2f09", "#dc2626", "#6366f1", "#4f46e5", "#10b981", "#f59e0b"];
     function getChartColors() {
-      var root = document.getElementById("ib-root");
       var computed = root ? getComputedStyle(root) : null;
       function resolved(varName, fallback) {
         var v = computed ? computed.getPropertyValue(varName).trim() : "";
         return v || fallback;
       }
       return [
-        resolved("--ib-accent", "#809a39"),
-        resolved("--ib-accent-dark", "#4c7a24"),
-        resolved("--ib-border", "#b7b64a"),
-        resolved("--ib-text", "#205b16"),
+        resolved("--ib-accent", "#6C5CE7"),
+        resolved("--ib-accent-dark", "#4B3FCC"),
+        resolved("--ib-border", "#E4E1FA"),
+        resolved("--ib-text", "#16162A"),
       ].concat(CHART_COLORS_FIXED_TAIL);
     }
     function buildChartDatasets(config) {
