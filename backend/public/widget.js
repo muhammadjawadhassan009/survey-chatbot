@@ -157,8 +157,8 @@
     ".ib-bubble-wrap { display: flex; flex-direction: column; max-width: 88%; }\n" +
     ".ib-row-user .ib-bubble-wrap { align-items: flex-end; }\n" +
     ".ib-bubble { border-radius: 20px; padding: 12px 16px; font-size: 13px; line-height: 1.6; position: relative; }\n" +
-    ".ib-bubble-user { background: var(--ib-text); color: #fff; border-bottom-right-radius: 6px; box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-text) 20%, transparent); }\n" +
-    ".ib-bubble-bot { background: #fff; color: #000; border-bottom-left-radius: 6px; box-shadow: 0 1px 3px color-mix(in srgb, var(--ib-text) 4%, transparent); border: 1px solid var(--ib-border); }\n" +
+    ".ib-bubble-user { background: var(--ib-accent); color: #fff; border-bottom-right-radius: 6px; box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-accent) 30%, transparent); }\n" +
+    ".ib-bubble-bot { background: #fff; color: var(--ib-text); border-bottom-left-radius: 6px; box-shadow: 0 1px 3px color-mix(in srgb, var(--ib-text) 4%, transparent); border: 1px solid var(--ib-border); }\n" +
     ".ib-msg-content { overflow-x: auto; }\n" +
     ".ib-msg-content .ib-link-btn { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #000; border: 1px solid var(--ib-border); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 500; text-decoration: none; transition: all .15s ease; box-shadow: 0 1px 2px rgba(0,0,0,.04); }\n" +
     ".ib-msg-content .ib-link-btn:hover { background: var(--ib-accent-soft); border-color: var(--ib-accent); transform: translateY(-1px); box-shadow: 0 2px 8px color-mix(in srgb, var(--ib-text) 8%, transparent); }\n" +
