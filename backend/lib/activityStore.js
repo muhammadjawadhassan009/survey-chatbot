@@ -86,4 +86,48 @@ async function listLeads(tenantId, limit = 50, dedicatedDatabaseUrl) {
   }));
 }
 
-module.exports = { isConfigured, recordConversationTurn, recordLead, listLeads };
+// Durable backing for the analytics dashboard — see analytics_events'
+// comment in db/schema.sql for why this exists as a generic log_type+entry
+// table rather than a bespoke metrics schema. Fire-and-forget (same
+// convention as every other function here): called from appendLog() in
+// server.js, which already writes the flat-file line first — a failure
+// here logs to stderr and moves on, it never blocks or fails the request
+// that triggered it. tenantId is nullable since a few log types (e.g. an
+// unscoped startup error) genuinely aren't tenant-specific.
+async function recordEvent(logType, entry, dedicatedDatabaseUrl) {
+  if (!isConfigured()) return;
+  await db.queryOn(
+    dedicatedDatabaseUrl,
+    "INSERT INTO analytics_events (tenant_id, log_type, entry) VALUES ($1,$2,$3)",
+    [entry?.tenantId || null, logType, JSON.stringify(entry || {})]
+  );
+}
+
+// Returns entries in the exact shape the flat-file reader
+// (readAllEntries in lib/analytics.js) already produces — { timestamp,
+// ...entry fields } — so computeAnalytics()'s aggregation logic doesn't
+// need to know or care whether its input came from a file line or a DB
+// row. days=null means "no cutoff" (matches computeAnalytics's own
+// days=null convention for "all time").
+async function listEvents(logType, { tenantId, days, dedicatedDatabaseUrl, limit = 5000 } = {}) {
+  if (!isConfigured() && !dedicatedDatabaseUrl) return null; // null = "not available" (caller should fall back to files)
+  const params = [logType];
+  const conditions = ["log_type = $1"];
+  if (tenantId && tenantId !== "all") {
+    params.push(tenantId);
+    conditions.push(`tenant_id = $${params.length}`);
+  }
+  if (days) {
+    params.push(days);
+    conditions.push(`created_at >= now() - ($${params.length} || ' days')::interval`);
+  }
+  params.push(Math.min(limit, 20000));
+  const { rows } = await db.queryOn(
+    dedicatedDatabaseUrl,
+    `SELECT entry, created_at FROM analytics_events WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT $${params.length}`,
+    params
+  );
+  return rows.map((r) => ({ timestamp: r.created_at.toISOString(), ...r.entry }));
+}
+
+module.exports = { isConfigured, recordConversationTurn, recordLead, listLeads, recordEvent, listEvents };
