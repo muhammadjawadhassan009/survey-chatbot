@@ -77,14 +77,28 @@ try {
   console.error("❌ Could not create logs directory:", err.message);
 }
 
-function appendLog(filePath, entry) {
+function appendLog(filePath, logType, entry) {
   const line = JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n";
   fs.appendFile(filePath, line, (err) => {
     if (err) console.error(`❌ Failed to write log (${filePath}):`, err.message);
   });
+  // Durable copy for the analytics dashboard — see analytics_events in
+  // db/schema.sql for why this exists. Deliberately always the SHARED
+  // pool (no per-tenant dedicated-database routing here, unlike
+  // conversation content/lead contact info above) — this is operational
+  // metering data (durations, tokens, cost, ratings), not customer
+  // content, so data-residency requirements that apply to the latter
+  // don't apply here. Fire-and-forget, same convention as everywhere else
+  // in this file: a failure here must never affect the file write above
+  // or the request that triggered it.
+  if (activityStore.isConfigured()) {
+    activityStore.recordEvent(logType, entry).catch((err) => {
+      console.error(`❌ DB analytics-event write failed for "${logType}" (file log still succeeded):`, err.message);
+    });
+  }
 }
 function logConversation(entry) {
-  appendLog(CONVERSATION_LOG, entry);
+  appendLog(CONVERSATION_LOG, "conversation", entry);
   if (activityStore.isConfigured() && (entry.userMessage || entry.assistantResponse)) {
     // Resolve the tenant to check for a dedicated database (data
     // residency) — see lib/activityStore.js's dedicatedDatabaseUrl param.
@@ -108,7 +122,7 @@ function logConversation(entry) {
 // logError writes FULL technical detail to disk + stderr only. Nothing from
 // here is ever sent verbatim to the browser — see FRIENDLY_ERROR_MESSAGES below.
 function logError(entry) {
-  appendLog(ERROR_LOG, entry);
+  appendLog(ERROR_LOG, "error", entry);
   console.error(`[${entry.context || "error"}]`, entry.message || entry);
 }
 // Escalation hand-offs (a visitor asked for a human + left an email).
@@ -117,7 +131,7 @@ function logError(entry) {
 // a generic webhook) — see lib/notifiers/. Fire-and-forget: a slow or
 // failing notifier should never delay or break the chat response.
 function logLead(entry, tenant) {
-  appendLog(LEAD_LOG, entry);
+  appendLog(LEAD_LOG, "lead", entry);
   if (activityStore.isConfigured()) {
     const { tenantId, sessionId, ...fields } = entry;
     activityStore
@@ -136,16 +150,16 @@ function logLead(entry, tenant) {
 // sales lead and shouldn't be mixed into that log or fire notifications
 // unless the automation explicitly opts in (automation.notifyOnExecution).
 function logExecution(entry) {
-  appendLog(AUTOMATION_LOG, entry);
+  appendLog(AUTOMATION_LOG, "automation_execution", entry);
 }
 // Guardrail trips — prompt-injection attempts caught before reaching the LLM.
 // Kept separate from errors.log so it can be monitored/alerted on independently.
 function logSecurity(entry) {
-  appendLog(SECURITY_LOG, entry);
+  appendLog(SECURITY_LOG, "security", entry);
   console.warn(`[security:${entry.context || "guardrail"}]`, entry.message || "");
 }
 function logFeedback(entry) {
-  appendLog(FEEDBACK_LOG, entry);
+  appendLog(FEEDBACK_LOG, "feedback", entry);
 }
 
 // User-facing messages — deliberately generic. Real detail only ever goes to logs.
@@ -661,7 +675,7 @@ app.get("/admin/automations", adminPageAuth, (req, res) => {
 });
 
 
-const { computeAnalytics } = require("./lib/analytics");
+const { computeAnalytics, computeAnalyticsFromEntries } = require("./lib/analytics");
 
 // Powers the sidebar status rail in the admin UI — a quick honest read of
 // which optional infra is actually configured/reachable right now, since
@@ -790,7 +804,7 @@ app.get("/api/admin/overview", adminAuth, (req, res) => {
   });
 });
 
-app.get("/api/admin/analytics", adminAuth, (req, res) => {
+app.get("/api/admin/analytics", adminAuth, async (req, res) => {
   const tenantId = req.query.tenantId || "all";
   if (tenantId !== "all" && !tenants.has(tenantId)) {
     return res.status(400).json({ error: `Unknown tenantId "${tenantId}"` });
@@ -798,12 +812,39 @@ app.get("/api/admin/analytics", adminAuth, (req, res) => {
   const daysParam = req.query.days;
   const days = daysParam === "all" ? null : Number(daysParam) || 30;
 
-  const result = computeAnalytics({
-    logPaths: { conversations: CONVERSATION_LOG, leads: LEAD_LOG, feedback: FEEDBACK_LOG, security: SECURITY_LOG },
-    tenantId,
-    days,
-  });
-  res.json({ ...result, costEstimatePricing: getPricingMeta() });
+  // Prefer the durable DB-backed history (see analytics_events in
+  // db/schema.sql) over the flat log files — those files live on this
+  // backend's own ephemeral disk and get wiped on every redeploy, which is
+  // exactly why "last 30 days" used to only ever show data since the most
+  // recent deploy. Falls back to files only when no database is
+  // configured at all (e.g. local dev without DATABASE_URL set).
+  let result;
+  let source;
+  if (activityStore.isConfigured()) {
+    source = "database (durable — survives redeploys)";
+    const [conversations, leads, feedback, security] = await Promise.all([
+      activityStore.listEvents("conversation", { tenantId, days }),
+      activityStore.listEvents("lead", { tenantId, days }),
+      activityStore.listEvents("feedback", { tenantId, days }),
+      activityStore.listEvents("security", { tenantId, days }),
+    ]);
+    result = computeAnalyticsFromEntries({
+      conversations: conversations || [],
+      leads: leads || [],
+      feedback: feedback || [],
+      security: security || [],
+      tenantId,
+      days,
+    });
+  } else {
+    source = "local log files (resets on every redeploy — configure a database for durable history)";
+    result = computeAnalytics({
+      logPaths: { conversations: CONVERSATION_LOG, leads: LEAD_LOG, feedback: FEEDBACK_LOG, security: SECURITY_LOG },
+      tenantId,
+      days,
+    });
+  }
+  res.json({ ...result, costEstimatePricing: getPricingMeta(), source });
 });
 
 const ADMIN_LOG_FILES = {
@@ -813,6 +854,18 @@ const ADMIN_LOG_FILES = {
   security: SECURITY_LOG,
   feedback: FEEDBACK_LOG,
   automation_executions: AUTOMATION_LOG,
+};
+// Maps the admin-facing plural query param (?type=conversations) to the
+// singular log_type string analytics_events rows are stored under (see
+// activityStore.recordEvent / db/schema.sql) — the two were never meant
+// to be the same string, just corresponding ones.
+const ADMIN_LOG_TYPE_TO_EVENT_TYPE = {
+  conversations: "conversation",
+  errors: "error",
+  leads: "lead",
+  security: "security",
+  feedback: "feedback",
+  automation_executions: "automation_execution",
 };
 
 app.get("/api/admin/logs", adminAuth, async (req, res) => {
@@ -824,12 +877,9 @@ app.get("/api/admin/logs", adminAuth, async (req, res) => {
   const n = Math.min(Number(req.query.n) || 25, 200);
   const tenantId = req.query.tenantId;
 
-  // Leads specifically are DB-backed once configured (see activityStore) —
-  // durable across redeploys. Other log types (conversations, errors,
-  // security, feedback, automation runs) stay file-based for now; the DB
-  // only captures role/content for conversations, not the full metrics
-  // (tokens, cost, duration) the file log line has, so reading from DB
-  // there would silently lose columns the table already shows.
+  // Leads have their own richer DB path (contact fields as real columns,
+  // not just a JSONB blob) — see activityStore.listLeads — so they're
+  // handled separately from the generic analytics_events path below.
   if (type === "leads" && activityStore.isConfigured()) {
     try {
       // A specific tenant with a dedicated database (data residency) has
@@ -842,6 +892,20 @@ app.get("/api/admin/logs", adminAuth, async (req, res) => {
       if (entries !== null) return res.json({ type, entries, source: "db" });
     } catch (err) {
       console.error("❌ DB lead read failed, falling back to file:", err.message);
+    }
+  } else if (activityStore.isConfigured() && !req.query.sessionId) {
+    // Every other log type now has a durable copy in analytics_events (see
+    // appendLog in this file) — prefer it over the flat file for the same
+    // reason as /api/admin/analytics above: the file is wiped on every
+    // redeploy. The sessionId branch below still needs file-based reading
+    // since that's a full-transcript, chronological-order view this table
+    // isn't optimized for; falls through to file reading for that case.
+    try {
+      const eventType = ADMIN_LOG_TYPE_TO_EVENT_TYPE[type];
+      const entries = await activityStore.listEvents(eventType, { tenantId, limit: n });
+      if (entries !== null) return res.json({ type, entries, source: "db" });
+    } catch (err) {
+      console.error(`❌ DB event read failed for "${type}", falling back to file:`, err.message);
     }
   }
 
