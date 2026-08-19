@@ -133,6 +133,29 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_conv_tenant_session ON conversation_messages(tenant_id, session_id, created_at);
 
+-- Durable backing for the admin analytics dashboard. Mirrors the flat
+-- JSONL log files' entries 1:1 (log_type + the exact JSON that used to be
+-- appended as a line) rather than a bespoke metrics schema — this is what
+-- lets computeAnalytics() in lib/analytics.js reuse its existing
+-- filter/aggregate logic almost unchanged, just fed from DB rows instead
+-- of file lines. Without this table, every one of these metrics (response
+-- times, token/cost tracking, thumbs up/down, intent breakdown) only ever
+-- existed in a file on the backend's own ephemeral disk — wiped on every
+-- redeploy, which is why "last 30 days" only ever showed data since the
+-- most recent deploy. Conversation message *content* and lead *contact
+-- info* already had their own durable tables (see conversation_messages
+-- and leads above) — this table is specifically for the analytics-only
+-- metering fields those don't capture (duration, tokens, cost, intent,
+-- rating).
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id          BIGSERIAL PRIMARY KEY,
+  tenant_id   TEXT,                    -- nullable: some log types (e.g. a startup error) aren't tenant-scoped
+  log_type    TEXT NOT NULL,           -- 'conversation' | 'lead' | 'feedback' | 'security' | 'error' | 'automation_execution'
+  entry       JSONB NOT NULL,          -- the exact object that used to be JSON.stringify'd as one log line
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_lookup ON analytics_events(log_type, tenant_id, created_at DESC);
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- MIGRATION NOTE for databases that ran an earlier version of this file
 -- (i.e. before the consultancy vertical was removed):
