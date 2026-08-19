@@ -41,14 +41,29 @@ function percentile(sortedArr, p) {
 }
 
 function computeAnalytics({ logPaths, tenantId, days }) {
+  return computeAnalyticsFromEntries({
+    conversations: readAllEntries(logPaths.conversations),
+    leads: readAllEntries(logPaths.leads),
+    feedback: readAllEntries(logPaths.feedback),
+    security: readAllEntries(logPaths.security),
+    tenantId,
+    days,
+  });
+}
+
+// Split out from computeAnalytics so the DB-backed path (server.js, via
+// activityStore.listEvents) can feed already-loaded entry arrays straight
+// in, without this function caring whether they came from a file or a
+// database row — both produce the same { timestamp, ...fields } shape.
+function computeAnalyticsFromEntries({ conversations, leads, feedback, security, tenantId, days }) {
   const sinceMs = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
   const matchesTenant = (e) => tenantId === "all" || e.tenantId === tenantId;
   const inScope = (e) => matchesTenant(e) && withinRange(e, sinceMs);
 
-  const conversations = readAllEntries(logPaths.conversations).filter(inScope);
-  const leads = readAllEntries(logPaths.leads).filter(inScope);
-  const feedback = readAllEntries(logPaths.feedback).filter(inScope);
-  const security = readAllEntries(logPaths.security).filter(inScope);
+  conversations = conversations.filter(inScope);
+  leads = leads.filter(inScope);
+  feedback = feedback.filter(inScope);
+  security = security.filter(inScope);
 
   const guardrailHandled = conversations.filter((e) => e.guardrail);
   const llmHandled = conversations.filter((e) => !e.guardrail);
@@ -151,4 +166,4 @@ function computeAnalytics({ logPaths, tenantId, days }) {
   };
 }
 
-module.exports = { computeAnalytics };
+module.exports = { computeAnalytics, computeAnalyticsFromEntries };
