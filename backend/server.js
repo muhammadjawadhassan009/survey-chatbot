@@ -821,21 +821,39 @@ app.get("/api/admin/analytics", adminAuth, async (req, res) => {
   let result;
   let source;
   if (activityStore.isConfigured()) {
-    source = "database (durable — survives redeploys)";
-    const [conversations, leads, feedback, security] = await Promise.all([
-      activityStore.listEvents("conversation", { tenantId, days }),
-      activityStore.listEvents("lead", { tenantId, days }),
-      activityStore.listEvents("feedback", { tenantId, days }),
-      activityStore.listEvents("security", { tenantId, days }),
-    ]);
-    result = computeAnalyticsFromEntries({
-      conversations: conversations || [],
-      leads: leads || [],
-      feedback: feedback || [],
-      security: security || [],
-      tenantId,
-      days,
-    });
+    try {
+      const [conversations, leads, feedback, security] = await Promise.all([
+        activityStore.listEvents("conversation", { tenantId, days }),
+        activityStore.listEvents("lead", { tenantId, days }),
+        activityStore.listEvents("feedback", { tenantId, days }),
+        activityStore.listEvents("security", { tenantId, days }),
+      ]);
+      result = computeAnalyticsFromEntries({
+        conversations: conversations || [],
+        leads: leads || [],
+        feedback: feedback || [],
+        security: security || [],
+        tenantId,
+        days,
+      });
+      source = "database (durable — survives redeploys)";
+    } catch (err) {
+      // Most likely cause: analytics_events doesn't exist yet on this
+      // database (schema.sql hasn't been re-run since it was added) — but
+      // whatever the cause, a DB error here must NEVER take the whole
+      // route down. An uncaught rejection in an async Express handler
+      // isn't caught by Express itself; left unhandled it can crash the
+      // entire Node process (default behavior since Node 15), which is
+      // what actually produces a 502 — the backend restarting, not a
+      // normal error response. Fall back to file-based analytics instead.
+      console.error("❌ DB analytics read failed, falling back to log files:", err.message);
+      result = computeAnalytics({
+        logPaths: { conversations: CONVERSATION_LOG, leads: LEAD_LOG, feedback: FEEDBACK_LOG, security: SECURITY_LOG },
+        tenantId,
+        days,
+      });
+      source = "local log files (DB read failed: " + err.message + ")";
+    }
   } else {
     source = "local log files (resets on every redeploy — configure a database for durable history)";
     result = computeAnalytics({
@@ -1739,6 +1757,31 @@ app.post("/api/automation-submit", async (req, res) => {
 
   const result = await executeAutomation(automation, { tenant, tenantId, sessionId: sid, collected: fields, logLead, logExecution });
   return res.json({ ok: true, message: result.message || "Done." });
+});
+
+// Process-level safety net. Today's actual incident: an unhandled rejection
+// inside an async Express route handler (a DB call that threw, with no
+// try/catch) took down the ENTIRE process — not just that one request —
+// because Node has treated unhandled rejections as fatal by default since
+// v15. A single flaky query in one endpoint shouldn't be able to crash
+// every other tenant's chat mid-conversation. This doesn't replace fixing
+// individual routes to handle their own errors properly (still the right
+// thing to do, still the primary defense) — it's the backstop for
+// whatever the next one turns out to be, in a codebase this size, rather
+// than relying on catching every single case by hand.
+process.on("unhandledRejection", (reason) => {
+  logError({ context: "unhandled_rejection", message: reason instanceof Error ? reason.message : String(reason), stack: reason instanceof Error ? reason.stack : undefined });
+});
+// uncaughtException is a stricter case (a genuinely uncaught synchronous
+// throw, not just an unhandled promise) — Node's own docs still recommend
+// exiting after one of these, since the process's internal state is no
+// longer guaranteed consistent. Railway will restart the process
+// automatically on exit, so this trades one bad request for a clean
+// restart instead of a process silently continuing in a possibly-broken
+// state indefinitely.
+process.on("uncaughtException", (err) => {
+  logError({ context: "uncaught_exception", message: err.message, stack: err.stack });
+  process.exit(1);
 });
 
 function startServer() {
