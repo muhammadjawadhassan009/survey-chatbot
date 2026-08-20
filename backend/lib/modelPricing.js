@@ -35,6 +35,14 @@ const PRICING_PER_1M_TOKENS = {
   "meta-llama/llama-3.3-70b-instruct": { prompt: 0.12, completion: 0.3 },
   "qwen/qwen-2.5-72b-instruct": { prompt: 0.13, completion: 0.4 },
   "deepseek/deepseek-r1": { prompt: 0.55, completion: 2.19 },
+  // "openai/gpt-5.6-luna": { prompt: 0, completion: 0 },  // ← add your actual model + real per-1M-token rates here.
+  // IMPORTANT: data/model-pricing.json (the runtime-editable override file
+  // below) lives on THIS SERVICE'S OWN DISK — same ephemeral-storage
+  // problem the old flat-file logs had (see analytics_events in
+  // db/schema.sql). Anything added there gets wiped on the next redeploy,
+  // same as the log files did. Add pricing HERE, in the source file, and
+  // commit it, if you want it to actually survive a deploy — the override
+  // file is meant for a quick same-session correction, not durable config.
 };
 
 const OVERRIDE_FILE = path.join(__dirname, "..", "data", "model-pricing.json");
