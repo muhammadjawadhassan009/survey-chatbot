@@ -154,7 +154,17 @@ async function search(tenantId, query, topK = 5, { country, category, fast = fal
   if (vectorDb?.qdrantUrl) qs.set("qdrantUrl", vectorDb.qdrantUrl);
   if (vectorDb?.qdrantApiKey) qs.set("qdrantApiKey", vectorDb.qdrantApiKey);
   if (vectorDb?.qdrantCollection) qs.set("collectionName", vectorDb.qdrantCollection);
-  const opts = fast ? { retries: 0, timeoutMs: 6_000 } : {};
+  // "Fast" mode trades away the default 2-retry/15s budget for something
+  // tighter, so a genuinely slow KB Service doesn't stall the whole chat
+  // response — but 0 retries at 6s was too tight in practice: kb-service
+  // (a Python process that loads embedding models into memory) can take
+  // longer than 6s to respond after a period of inactivity, and with zero
+  // retries that cold-start delay became an outright failure on exactly
+  // the first message of a new conversation — the worst possible moment
+  // for it. One retry gives a cold instance a second chance once it's
+  // already warmed up from the first attempt, and 10s still keeps this
+  // meaningfully tighter than a full request()'s default 15s/2-retries.
+  const opts = fast ? { retries: 1, timeoutMs: 10_000 } : {};
   return request("GET", `/search?${qs.toString()}`, opts);
 }
 
