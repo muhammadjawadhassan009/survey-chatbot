@@ -56,7 +56,14 @@ function resolveProviderEntry(raw, globalDefaults) {
   const apiUrl = raw.apiUrl || globalDefaults.apiUrl;
   const apiKey = raw.apiKeyEnv ? process.env[raw.apiKeyEnv] : globalDefaults.apiKey;
   const models = Array.isArray(raw.models) && raw.models.length ? raw.models : [globalDefaults.model];
-  return { apiUrl, apiKey, models, apiKeyEnvName: raw.apiKeyEnv || "OPENROUTER_API_KEY (global)" };
+  // Defaults to 0 (reasoning off) for the reason in the request-body
+  // comment below — but some reasoning-native models genuinely need a
+  // real budget to produce good output at all, not just "better" output,
+  // so this needs to be a per-tenant override, not a global constant.
+  const reasoningMaxTokens = typeof raw.reasoningMaxTokens === "number" && raw.reasoningMaxTokens >= 0
+    ? Math.min(raw.reasoningMaxTokens, 32000)
+    : 0;
+  return { apiUrl, apiKey, models, apiKeyEnvName: raw.apiKeyEnv || "OPENROUTER_API_KEY (global)", reasoningMaxTokens };
 }
 
 const MAX_CONCURRENT_PER_KEY = Number(process.env.MAX_CONCURRENT_PER_PROVIDER_KEY) || 3;
@@ -184,12 +191,19 @@ async function streamFromProviderChain(providerChain, payloadMessagesBuilder, re
           // spends its whole token budget thinking before emitting real
           // content, fullResponseText stays empty and the whole attempt
           // gets reported as "returned no content", even though the
-          // request itself succeeded. This is a grounded Q&A chatbot, not
-          // a task that benefits from visible-to-us reasoning, so turn it
-          // off unconditionally rather than trying to pattern-match model
-          // names — OpenRouter ignores this param on models that don't
-          // support it, so it's harmless to send everywhere.
-          reasoning: { max_tokens: 0 },
+          // request itself succeeded. That's the failure mode this
+          // defaults to guarding against (reasoning off, 0 tokens) — but
+          // some reasoning-native models genuinely need real reasoning
+          // budget to produce good output, not just "more thorough"
+          // output; forcing it off for those actively degrades answers
+          // rather than just wasting tokens. Per-provider override via
+          // tenant_meta.provider.reasoningMaxTokens (0 = off, the safe
+          // default every existing tenant keeps unless they opt in).
+          // OpenRouter ignores this param entirely on models that don't
+          // support reasoning, so a nonzero value here is harmless to send
+          // even to a non-reasoning model in the same provider's fallback
+          // list.
+          reasoning: { max_tokens: provider.reasoningMaxTokens || 0 },
           // No temperature was being sent at all, which means every model
           // was using ITS OWN default — commonly 1.0, tuned for creative/
           // conversational variety, not for consistently repeating the
