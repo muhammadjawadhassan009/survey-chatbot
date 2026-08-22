@@ -73,12 +73,13 @@ async function health() {
   return request("GET", "/health", { retries: 0 }); // health checks shouldn't hang around retrying
 }
 
-async function uploadFile(tenantId, fileBuffer, filename, mimeType, country, category, vectorDb) {
+async function uploadFile(tenantId, fileBuffer, filename, mimeType, country, category, date, vectorDb) {
   if (!isConfigured()) return { ok: false, error: "KB Service is not configured (KB_SERVICE_URL unset).", status: 503 };
   const form = new FormData();
   form.append("tenantId", tenantId);
   if (country) form.append("country", country);
   if (category) form.append("category", category);
+  if (date) form.append("date", date);
   appendVectorDbFields(form, vectorDb);
   form.append("file", new Blob([fileBuffer], { type: mimeType || "application/octet-stream" }), filename);
   return request("POST", "/ingest", { formData: form });
