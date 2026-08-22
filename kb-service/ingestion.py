@@ -42,6 +42,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.ingestion import IngestionPipeline, DocstoreStrategy
 from llama_index.core.node_parser import SentenceSplitter
@@ -130,6 +131,18 @@ def _ensure_collection(client: QdrantClient, name: str):
     client.create_payload_index(
         collection_name=name,
         field_name="category",
+        field_schema=KeywordIndexParams(type=PayloadSchemaType.KEYWORD),
+    )
+    # Missing until now — delete_file()'s vector_store.delete(ref_doc_id=...)
+    # filters by this exact field, and Qdrant rejects a filter on any field
+    # with no index at all with a 400 (not just "slow", an outright error:
+    # "Index required but not found for \"doc_id\""). This is why every
+    # delete attempt was failing. create_payload_index is idempotent and
+    # this function already runs on every startup, so this retroactively
+    # fixes the existing collection too — no separate migration needed.
+    client.create_payload_index(
+        collection_name=name,
+        field_name="doc_id",
         field_schema=KeywordIndexParams(type=PayloadSchemaType.KEYWORD),
     )
 
