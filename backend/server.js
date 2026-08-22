@@ -36,6 +36,7 @@ const { estimateCostUsd, getPricingMeta } = require("./lib/modelPricing");
 const { dispatchLead } = require("./lib/notifiers");
 const { kvGet, kvSet, kvDelete, kvAppendAndCountRecent, kvCountRecent, isRedisActive } = require("./lib/kv");
 const kbClient = require("./lib/kbClient");
+const responseCache = require("./lib/responseCache");
 const tenantStore = require("./lib/tenantStore");
 const activityStore = require("./lib/activityStore");
 const { resolveProviderEntry, streamFromProviderChain, providerSemaphore } = require("./lib/providerChain");
@@ -1028,12 +1029,20 @@ app.post("/api/admin/kb/:tenantId/upload", adminAuth, kbUpload.single("file"), a
   if (!req.file) {
     return res.status(400).json({ error: "No file provided (expected multipart field 'file')" });
   }
-  const country = typeof req.body?.country === "string" && req.body.country.trim() ? req.body.country.trim() : undefined;
-  const category = typeof req.body?.category === "string" && req.body.category.trim() ? req.body.category.trim() : undefined;
-  const result = await kbClient.uploadFile(req.params.tenantId, req.file.buffer, req.file.originalname, req.file.mimetype, country, category, tenant.dataResidency);
+  const parsedMeta = parseEmbeddedMetadata(req.file.buffer);
+  const country = (typeof req.body?.country === "string" && req.body.country.trim()) || parsedMeta.country || undefined;
+  const category = (typeof req.body?.category === "string" && req.body.category.trim()) || parsedMeta.category || undefined;
+  const date = (typeof req.body?.date === "string" && req.body.date.trim()) || parsedMeta.date || undefined;
+  const result = await kbClient.uploadFile(req.params.tenantId, req.file.buffer, req.file.originalname, req.file.mimetype, country, category, date, tenant.dataResidency);
   if (!result.ok) {
     return res.status(result.status === 503 ? 503 : 502).json({ error: result.error });
   }
+  // Fire-and-forget: any previously-cached answer (see lib/responseCache.js)
+  // could now be missing or contradicting whatever this file adds — queued
+  // here rather than after the async ingestion job actually finishes,
+  // which trades a few-second window of possibly-stale cache hits for not
+  // needing to poll job completion just to invalidate a cache.
+  responseCache.invalidateTenantCache(req.params.tenantId);
   res.json(result.data);
 });
 
@@ -1115,6 +1124,7 @@ app.post("/api/admin/kb/:tenantId/upload-batch", adminAuth, kbBatchUpload.array(
   if (!result.ok) {
     return res.status(result.status === 503 ? 503 : 502).json({ error: result.error });
   }
+  responseCache.invalidateTenantCache(req.params.tenantId);
   res.json(result.data);
 });
 
@@ -1130,6 +1140,7 @@ app.delete("/api/admin/kb/:tenantId/files/:filename", adminAuth, async (req, res
   const category = typeof req.query.category === "string" && req.query.category.trim() ? req.query.category.trim() : undefined;
   const result = await kbClient.deleteFile(req.params.tenantId, req.params.filename, country, category, tenant?.dataResidency);
   if (!result.ok) return res.status(result.status === 503 ? 503 : result.status === 404 ? 404 : 502).json({ error: result.error });
+  responseCache.invalidateTenantCache(req.params.tenantId);
   res.json(result.data);
 });
 
@@ -1139,6 +1150,7 @@ app.post("/api/admin/kb/:tenantId/files/:filename/reindex", adminAuth, async (re
   const category = typeof req.query.category === "string" && req.query.category.trim() ? req.query.category.trim() : undefined;
   const result = await kbClient.reindexFile(req.params.tenantId, req.params.filename, country, category, tenant?.dataResidency);
   if (!result.ok) return res.status(result.status === 503 ? 503 : result.status === 404 ? 404 : 502).json({ error: result.error });
+  responseCache.invalidateTenantCache(req.params.tenantId);
   res.json(result.data);
 });
 
@@ -1497,6 +1509,27 @@ app.post("/api/chat", async (req, res) => {
     res.end();
   }
 
+  // Shared wire contract every non-streaming response (guardrail refusals,
+  // greetings, zero-field automation results) uses: plain text, optionally
+  // followed by a trailing ```json block carrying followups — same shape
+  // sendFormResponse uses for its renderForm block, just a different key,
+  // so the widget's response parser only needs one code path for both.
+  //
+  // NOTE: this function was being called from three places (injection
+  // guardrail, zero-field automation execution, greeting) with no
+  // definition anywhere in the file — a genuine ReferenceError on every
+  // single greeting, prompt-injection attempt, and zero-field automation
+  // run, until this was added. If you've been wondering why saying "hi" to
+  // the bot never worked, this was why.
+  function sendGuardrailResponse(text, followups, extra = {}) {
+    res.write(text);
+    if (Array.isArray(followups) && followups.length) {
+      res.write(`\n\n\`\`\`json\n${JSON.stringify({ followups })}\n\`\`\``);
+    }
+    logConversation({ sessionId: sid, tenantId, userMessage: lastUserMessage, assistantResponse: text, guardrail: true, durationMs: 0, ...extra });
+    res.end();
+  }
+
   // tenant.suggestedQuestions is for the START of a conversation only —
   // only the greeting branch below should use it.
   const startFollowups = tenant.suggestedQuestions.slice(0, 3);
@@ -1566,6 +1599,33 @@ app.post("/api/chat", async (req, res) => {
   });
 
   const startedAt = Date.now();
+
+  // --- Response cache (first-turn questions only) -------------------------
+  // See lib/responseCache.js for the full design rationale. Only genuinely
+  // fresh conversations (no prior turns) are eligible — a follow-up's
+  // correct answer depends on everything said before it, which a
+  // tenant-scoped cache keyed only on the message text has no way to
+  // account for. Skipping straight past KB search + the LLM call entirely
+  // on a hit is the whole point: this is the fast path, not a fallback.
+  const isFirstTurn = cleanMessages.length === 1;
+  if (isFirstTurn) {
+    const cached = await responseCache.getCachedResponse(tenantId, lastUserMessage);
+    if (cached && typeof cached.text === "string") {
+      res.write(cached.text);
+      logConversation({
+        sessionId: sid,
+        tenantId,
+        userMessage: lastUserMessage,
+        assistantResponse: cached.text,
+        cacheHit: true,
+        durationMs: Date.now() - startedAt,
+        kbSearchMs: 0,
+        llmDurationMs: 0,
+      });
+      responseFinished = true;
+      return res.end();
+    }
+  }
 
   // Cap history sent to the model — this was previously unbounded (the
   // entire conversation, forever), which is fine on a free model but a
@@ -1672,6 +1732,13 @@ app.post("/api/chat", async (req, res) => {
       completionTokens,
       estimatedCostUsd,
     });
+
+    // Only cache a clean, complete, first-turn answer — never a truncated
+    // or cut-short one (see the ⚠️ appends above), which would replay the
+    // same broken response to every future asker of the same question.
+    if (isFirstTurn && result.finishReason === "stop" && !result.truncatedMidStream) {
+      responseCache.setCachedResponse(tenantId, lastUserMessage, { text: result.fullResponseText }).catch(() => {});
+    }
 
     responseFinished = true;
     res.end();
