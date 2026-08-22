@@ -32,9 +32,10 @@
         <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.csv,.html,.htm,.json" />
         <input type="text" id="countryInput" placeholder="Country (optional — e.g. United Kingdom)" style="width:240px;" />
         <input type="text" id="categoryInput" placeholder="Category (optional — e.g. study-visa)" style="width:220px;" />
+        <input type="text" id="dateInput" placeholder="Date (optional — YYYY-MM-DD)" style="width:180px;" />
         <button id="uploadBtn" class="primary">Upload</button>
       </div>
-      <div class="status-line" style="margin-top:6px;">Allowed: PDF, DOCX, TXT, MD, CSV, HTML, JSON — up to 25MB. Leave country/category blank for tenant-general content (visible for every question); set country to scope a file to one destination country, category to scope it to a content type (e.g. "study-visa") — either or both, independently.</div>
+      <div class="status-line" style="margin-top:6px;">Allowed: PDF, DOCX, TXT, MD, CSV, HTML, JSON — up to 25MB. Leave country/category/date blank for tenant-general content (visible for every question) — or leave them blank and let a <span class="mono">.md</span> file's own metadata block auto-fill them, same as batch upload does. Date drives recency-ranking for "latest" questions.</div>
       <div id="uploadProgressWrap" style="display:none; margin-top:10px;">
         <div class="status-line" id="uploadProgressLabel">Uploading…</div>
         <div class="progress-bar"><div class="progress-bar-fill" id="uploadProgressFill" style="width:0%;"></div></div>
@@ -158,12 +159,15 @@ document.getElementById("uploadBtn").addEventListener("click", () => {
   const file = fileInput.files[0];
   const countryInput = document.getElementById("countryInput");
   const categoryInput = document.getElementById("categoryInput");
+  const dateInput = document.getElementById("dateInput");
   const country = countryInput.value.trim();
   const category = categoryInput.value.trim();
+  const date = dateInput.value.trim();
   const form = new FormData();
   form.append("file", file);
   if (country) form.append("country", country);
   if (category) form.append("category", category);
+  if (date) form.append("date", date);
 
   const wrap = document.getElementById("uploadProgressWrap");
   const fill = document.getElementById("uploadProgressFill");
@@ -186,6 +190,7 @@ document.getElementById("uploadBtn").addEventListener("click", () => {
     fileInput.value = "";
     countryInput.value = "";
     categoryInput.value = "";
+    dateInput.value = "";
     try {
       const data = JSON.parse(xhr.responseText);
       if (xhr.status >= 200 && xhr.status < 300) {
