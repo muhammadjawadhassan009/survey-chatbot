@@ -18,12 +18,31 @@
   var THIS_SCRIPT = document.currentScript;
   var API_BASE = (THIS_SCRIPT && THIS_SCRIPT.dataset.apiBase) || (THIS_SCRIPT ? new URL(THIS_SCRIPT.src, window.location.href).origin : window.location.origin);
   var TENANT_ID = (THIS_SCRIPT && THIS_SCRIPT.dataset.tenant) || "default";
+  // Unique per script-tag instance, not per tenant — if the same tenant's
+  // widget is (accidentally or deliberately) embedded twice on one page,
+  // or two different tenants' widgets end up on the same page (a test/
+  // staging page, say), each instance still gets its own uniquely-ID'd
+  // root element. Without this, every instance would share the literal
+  // id="ib-root", and since CSS ID selectors match ALL elements with that
+  // id (duplicate ids are invalid HTML, but browsers still apply matching
+  // rules to every match, not just the first), the LAST instance's
+  // "#ib-root#ib-root { --ib-accent: ... }" theme-override rule would win
+  // and apply to every instance's root, not just its own — the exact
+  // "one tenant's config affecting another" symptom this fixes.
   var INSTANCE_ID = TENANT_ID.replace(/[^a-zA-Z0-9_-]/g, "") + "-" + Math.random().toString(36).slice(2, 8);
   var ROOT_ID = "ib-root-" + INSTANCE_ID;
-  var root;
+  var root; // set by buildMarkup(), read by initWidget() and getChartColors() — hoisted here (not `var`-declared inside either) since they're sibling functions in this IIFE, not nested within each other.
+  // Sent as X-Widget-Key on every public request — NOT a true secret (it's
+  // sitting right here in this page's HTML source), but lets the backend
+  // apply per-tenant rate-limit/abuse handling and revoke/rotate one
+  // tenant's key without affecting any other tenant. Optional: a tenant
+  // with no widgetKey configured on the backend just isn't checked.
   var TENANT_KEY = (THIS_SCRIPT && THIS_SCRIPT.dataset.tenantKey) || "";
   var MAX_INPUT_LENGTH = 4000;
 
+  // All persisted state is namespaced by TENANT_ID — critical so two tenant demo
+  // pages on the same origin never leak each other's chat history (tenant isolation
+  // applies to client-side storage too, not just the backend).
   var STORAGE_KEY_CHATS = "ib_chats_" + TENANT_ID;
   var STORAGE_KEY_ACTIVE = "ib_active_chat_" + TENANT_ID;
 
@@ -31,10 +50,10 @@
     try { return window.localStorage.getItem(key); } catch (e) { return null; }
   }
   function safeStorageSet(key, value) {
-    try { window.localStorage.setItem(key, value); } catch (e) { }
+    try { window.localStorage.setItem(key, value); } catch (e) { /* storage unavailable/full — degrade silently */ }
   }
   function safeStorageRemove(key) {
-    try { window.localStorage.removeItem(key); } catch (e) { }
+    try { window.localStorage.removeItem(key); } catch (e) { /* ignore */ }
   }
 
   function loadAllChats() {
@@ -51,6 +70,11 @@
     safeStorageSet(STORAGE_KEY_CHATS, JSON.stringify(chats));
   }
   function newChatId() {
+    // crypto.randomUUID() (available in all modern browsers) rather than
+    // Math.random() — sessionId keys automation/booking state server-side,
+    // so a predictable ID is a real (if narrow) guessing-attack surface.
+    // Falls back to the old Math.random()-based form only on genuinely
+    // ancient browsers that lack crypto.randomUUID.
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       return "chat_" + window.crypto.randomUUID();
     }
@@ -80,6 +104,9 @@
     return Promise.allSettled ? Promise.allSettled(jobs) : Promise.all(jobs.map(function (p) { return p.catch(function (e) { return e; }); }));
   }
 
+  // ---------------------------------------------------------------------------
+  // Styles — modern, minimalist, CSS-variable-driven for easy theming
+  // ---------------------------------------------------------------------------
   var CSS = "\n" +
     ".ib-root { font-family: var(--ib-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);" +
     " --ib-accent: #6C5CE7; --ib-accent-dark: #4B3FCC; --ib-accent-soft: #EEEAFF;" +
@@ -90,7 +117,7 @@
     "@keyframes ib-msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }\n" +
     "@keyframes ib-pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ib-text) 35%, transparent); } 70% { box-shadow: 0 0 0 12px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }\n" +
     "@keyframes ib-pop-in { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: scale(1); } }\n" +
-    ".ib-launcher { position: fixed; bottom: 24px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999999; background: var(--ib-accent); color: #fff; border: none; border-radius: var(--ib-launcher-radius); width: 60px; height: 60px; box-shadow: 0 8px 24px color-mix(in srgb, var(--ib-accent) 35%, transparent); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform .2s cubic-bezier(.34,1.56,.64,1); }\n" +
+    ".ib-launcher { position: fixed; font-family: inherit; bottom: 24px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999999; background: var(--ib-accent); color: #fff; border: none; border-radius: var(--ib-launcher-radius); width: 60px; height: 60px; box-shadow: 0 8px 24px color-mix(in srgb, var(--ib-accent) 35%, transparent); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform .2s cubic-bezier(.34,1.56,.64,1); }\n" +
     ".ib-launcher.ib-attention { animation: ib-pulse-ring 2.2s infinite; }\n" +
     ".ib-launcher:hover { transform: scale(1.08) rotate(-3deg); }\n" +
     ".ib-launcher:active { transform: scale(.94); }\n" +
@@ -99,11 +126,16 @@
     ".ib-panel.ib-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }\n" +
     ".ib-panel.ib-maximized { width: min(720px, 96vw); top: 20px; bottom: 20px; height: auto; }\n" +
     "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } .ib-teaser { display: none; } }\n" +
+    // Proactive teaser bubble — the "line outside the box before opening"
+    // pattern popular chat widgets (Intercom/Fin, Drift, etc.) use to
+    // invite a click instead of waiting passively for one. Positioned via
+    // the same --ib-side-right/--ib-side-left vars as the launcher/panel
+    // so it correctly follows a tenant's chosen corner.
     ".ib-teaser { position: fixed; bottom: 96px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999998; max-width: 240px; background: #fff; color: var(--ib-text); border: 1px solid var(--ib-border); border-radius: 16px; padding: 12px 32px 12px 14px; font-size: 13px; line-height: 1.4; box-shadow: 0 12px 32px color-mix(in srgb, var(--ib-text) 14%, transparent); cursor: pointer; opacity: 0; transform: translateY(8px) scale(.96); transition: opacity .3s ease, transform .3s cubic-bezier(.22,1,.36,1); pointer-events: none; }\n" +
     ".ib-teaser.ib-teaser-visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }\n" +
     ".ib-teaser::after { content: ''; position: absolute; bottom: -7px; right: 26px; left: auto; width: 14px; height: 14px; background: #fff; border-right: 1px solid var(--ib-border); border-bottom: 1px solid var(--ib-border); transform: rotate(45deg); }\n" +
     ".ib-teaser.ib-pos-left::after { right: auto; left: 26px; }\n" +
-    ".ib-teaser-close { position: absolute; top: 6px; right: 8px; width: 18px; height: 18px; border: none; background: none; color: var(--ib-text-soft); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }\n" +
+    ".ib-teaser-close { position: absolute; font-family: inherit; top: 6px; right: 8px; width: 18px; height: 18px; border: none; background: none; color: var(--ib-text-soft); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }\n" +
     ".ib-teaser-close:hover { background: color-mix(in srgb, var(--ib-text) 8%, transparent); }\n" +
     ".ib-header { background: linear-gradient(135deg, color-mix(in srgb, var(--ib-accent) 10%, white), #fff 60%); border-bottom: 1px solid var(--ib-border); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }\n" +
     ".ib-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }\n" +
@@ -112,7 +144,7 @@
     ".ib-title { font-weight: 700; font-size: 14px; color: var(--ib-text); letter-spacing: -.01em; }\n" +
     ".ib-subtitle { font-size: 11px; color: var(--ib-text-soft); margin-top: 1px; }\n" +
     ".ib-header-actions { display: flex; align-items: center; gap: 1px; }\n" +
-    ".ib-icon-btn { background: none; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all .15s ease; }\n" +
+    ".ib-icon-btn { background: none; font-family: inherit; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all .15s ease; }\n" +
     ".ib-icon-btn:hover { color: var(--ib-text); background: var(--ib-accent-soft); }\n" +
     ".ib-icon-btn:active { transform: scale(.92); }\n" +
     ".ib-icon-btn svg { width: 16px; height: 16px; }\n" +
@@ -136,9 +168,9 @@
     ".ib-msg-content tr:nth-child(even) td { background: #f4f6ec; }\n" +
     ".ib-msg-actions { position: absolute; bottom: 6px; right: 6px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s ease; z-index: 2; }\n" +
     ".ib-row-bot:hover .ib-msg-actions, .ib-msg-actions.ib-force-show { opacity: 1; }\n" +
-    ".ib-msg-copy-btn { background: #fff; border: 1px solid var(--ib-border); color: #000; cursor: pointer; padding: 4px; border-radius: 6px; font-size: 11px; transition: all .15s ease; display: inline-flex; align-items: center; gap: 4px; }\n" +
+    ".ib-msg-copy-btn { background: #fff; font-family: inherit; border: 1px solid var(--ib-border); color: #000; cursor: pointer; padding: 4px; border-radius: 6px; font-size: 11px; transition: all .15s ease; display: inline-flex; align-items: center; gap: 4px; }\n" +
     ".ib-msg-copy-btn:hover { color: var(--ib-accent); border-color: var(--ib-border); background: #f4f6ec; }\n" +
-    ".ib-scroll-down-btn { position: absolute; bottom: 40px; right: 20px; transform: scale(1); background: #fff; border: 1px solid var(--ib-border); box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-text) 8%, transparent); color: var(--ib-accent); border-radius: 50%; width: 34px; height: 34px; display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 10; transition: all .15s ease; }\n" +
+    ".ib-scroll-down-btn { position: absolute; font-family: inherit; bottom: 40px; right: 20px; transform: scale(1); background: #fff; border: 1px solid var(--ib-border); box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-text) 8%, transparent); color: var(--ib-accent); border-radius: 50%; width: 34px; height: 34px; display: none; align-items: center; justify-content: center; cursor: pointer; z-index: 10; transition: all .15s ease; }\n" +
     ".ib-scroll-down-btn.ib-show { display: flex; animation: ib-pop .2s cubic-bezier(.34,1.56,.64,1); }\n" +
     ".ib-scroll-down-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px color-mix(in srgb, var(--ib-text) 12%, transparent); }\n" +
     ".ib-scroll-down-btn svg { width: 16px; height: 16px; }\n" +
@@ -147,7 +179,7 @@
     ".ib-textarea { flex: 1; resize: none; border: 1.5px solid var(--ib-border); border-radius: 18px; padding: 8px 12px; font-size: 13px; font-family: inherit; max-height: 100px; outline: none; transition: all .15s ease; background: var(--ib-bg); line-height: 1.5; }\n" +
     ".ib-textarea:focus { border-color: var(--ib-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ib-accent) 15%, transparent); background: #fff; }\n" +
     ".ib-textarea::placeholder { color: var(--ib-text-soft); }\n" +
-    ".ib-send-btn { background: linear-gradient(135deg, var(--ib-accent), var(--ib-accent-dark)); color: #fff; border: none; border-radius: 50%; width: 38px; height: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .2s cubic-bezier(.34,1.56,.64,1); box-shadow: 0 4px 14px color-mix(in srgb, var(--ib-accent) 25%, transparent); }\n" +
+    ".ib-send-btn { background: linear-gradient(135deg, var(--ib-accent), var(--ib-accent-dark)); color: #fff; border: none; border-radius: 50%; font-family: inherit; width: 38px; height: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .2s cubic-bezier(.34,1.56,.64,1); box-shadow: 0 4px 14px color-mix(in srgb, var(--ib-accent) 25%, transparent); }\n" +
     ".ib-send-btn:hover { transform: scale(1.08); box-shadow: 0 6px 20px color-mix(in srgb, var(--ib-accent) 35%, transparent); }\n" +
     ".ib-send-btn:active { transform: scale(.92); }\n" +
     ".ib-send-btn.ib-stop-mode { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 14px rgba(220,38,38,.25); }\n" +
@@ -168,7 +200,7 @@
     ".ib-history-page { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--ib-accent-soft); z-index: 15; display: none; flex-direction: column; animation: ib-slide-up .2s cubic-bezier(.22,1,.36,1); }\n" +
     ".ib-history-page.ib-show { display: flex; }\n" +
     ".ib-history-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: #fff; border-bottom: 1px solid var(--ib-border); flex-shrink: 0; }\n" +
-    ".ib-history-back-btn { background: none; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 8px; border-radius: 10px; display: flex; align-items: center; gap: 6px; transition: all .15s ease; flex-shrink: 0; }\n" +
+    ".ib-history-back-btn { background: none; font-family: inherit; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 8px; border-radius: 10px; display: flex; align-items: center; gap: 6px; transition: all .15s ease; flex-shrink: 0; }\n" +
     ".ib-history-back-btn:hover { color: var(--ib-text); background: var(--ib-accent-soft); }\n" +
     ".ib-history-back-btn:active { transform: scale(.92); }\n" +
     ".ib-history-back-btn svg { width: 18px; height: 18px; }\n" +
@@ -184,7 +216,7 @@
     ".ib-history-item-info { flex: 1; min-width: 0; }\n" +
     ".ib-history-item-title { font-size: 12px; font-weight: 500; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n" +
     ".ib-history-item-meta { font-size: 10px; color: var(--ib-text-soft); margin-top: 1px; }\n" +
-    ".ib-history-item-menu { background: none; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 4px; border-radius: 6px; display: flex; align-items: center; transition: all .15s ease; flex-shrink: 0; }\n" +
+    ".ib-history-item-menu { background: none; font-family: inherit; border: none; color: var(--ib-text-soft); cursor: pointer; padding: 4px; border-radius: 6px; display: flex; align-items: center; transition: all .15s ease; flex-shrink: 0; }\n" +
     ".ib-history-item-menu:hover { color: #dc2626; background: #fef2f2; }\n" +
     ".ib-history-item-menu svg { width: 16px; height: 16px; }\n" +
     ".ib-history-empty { padding: 30px 16px; text-align: center; color: var(--ib-text-soft); }\n" +
@@ -193,27 +225,15 @@
     ".ib-history-empty-title { font-size: 14px; font-weight: 600; color: #000; margin-bottom: 3px; }\n" +
     ".ib-history-empty-text { font-size: 12px; color: var(--ib-text-soft); }\n" +
     ".ib-history-new-chat-bar { position: absolute; bottom: 0; left: 0; right: 0; padding: 12px; background: linear-gradient(to top, var(--ib-accent-soft) 80%, transparent); flex-shrink: 0; }\n" +
-    ".ib-history-new-chat-btn { width: 100%; padding: 12px; background: linear-gradient(135deg, var(--ib-accent), var(--ib-accent-dark)); color: #fff; border: none; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all .15s ease; box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-accent) 25%, transparent); }\n" +
+    ".ib-history-new-chat-btn { width: 100%; font-family: inherit; padding: 12px; background: linear-gradient(135deg, var(--ib-accent), var(--ib-accent-dark)); color: #fff; border: none; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all .15s ease; box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-accent) 25%, transparent); }\n" +
     ".ib-history-new-chat-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(128,154,57,.3); }\n" +
     ".ib-history-new-chat-btn:active { transform: translateY(0) scale(.98); }\n" +
     ".ib-history-new-chat-btn svg { width: 16px; height: 16px; }\n" +
-    ".ib-chips-label { font-size: 12px; font-weight: 600; color: var(--ib-text-soft); margin: 4px 0 10px; text-align: center; }\n" +
+    ".ib-chips-label { font-size: 12px; font-weight: 600; color: var(--ib-text-soft); margin: 4px 0 8px 2px; }\n" +
     ".ib-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }\n" +
-    ".ib-chip { font-size: 12px; font-weight: 500; background: var(--ib-accent-soft); color: var(--ib-accent-dark); border: 1px solid transparent; border-radius: 999px; padding: 8px 14px; cursor: pointer; transition: all .15s ease; }\n" +
+    ".ib-chip { font-size: 12px; font-family: inherit; font-weight: 500; background: var(--ib-accent-soft); color: var(--ib-accent-dark); border: 1px solid transparent; border-radius: 999px; padding: 8px 14px; cursor: pointer; transition: all .15s ease; }\n" +
     ".ib-chip:hover { background: var(--ib-accent); border-color: var(--ib-accent); color: #fff; transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--ib-accent) 35%, transparent); }\n" +
     ".ib-chip:active { transform: translateY(0) scale(.97); }\n" +
-    // Intro/welcome state (empty chat, before any user message) — everything
-    // centered in the message pane, per the structural blueprint: the
-    // greeting bubble, the "Try asking:" label, and each suggested question
-    // as its own full-width (85%) centered button stacked vertically,
-    // rather than left-aligned chat bubbles or a wrapped chip row.
-    ".ib-intro-row { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 12px 0 4px; gap: 4px; animation: ib-slide-up .25s cubic-bezier(.22,1,.36,1); }\n" +
-    ".ib-intro-bubble { width: 85%; max-width: 85%; background: #fff; color: var(--ib-text); border: 1px solid var(--ib-border); border-radius: 16px; padding: 14px 16px; font-size: 13px; line-height: 1.6; box-shadow: 0 1px 3px color-mix(in srgb, var(--ib-text) 4%, transparent); }\n" +
-    ".ib-suggest-row { display: flex; flex-direction: column; align-items: center; width: 100%; padding: 4px 0; }\n" +
-    ".ib-chips-vertical { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; }\n" +
-    ".ib-chip-full { width: 85%; max-width: 85%; text-align: center; font-size: 12px; font-weight: 500; background: var(--ib-accent-soft); color: var(--ib-accent-dark); border: 1px solid transparent; border-radius: 12px; padding: 10px 14px; cursor: pointer; transition: all .15s ease; }\n" +
-    ".ib-chip-full:hover { background: var(--ib-accent); border-color: var(--ib-accent); color: #fff; transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--ib-accent) 35%, transparent); }\n" +
-    ".ib-chip-full:active { transform: translateY(0) scale(.98); }\n" +
     ".ib-typing-row { display: flex; align-items: center; gap: 8px; color: #000; font-size: 13px; font-weight: 500; }\n" +
     ".ib-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ib-accent); animation: ib-bounce 1.4s infinite ease-in-out; }\n" +
     ".ib-dot:nth-child(2) { animation-delay: .15s; }\n" +
@@ -230,6 +250,9 @@
     document.head.appendChild(style);
   }
 
+  // ---------------------------------------------------------------------------
+  // Icons
+  // ---------------------------------------------------------------------------
   var ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8-1.06 0-2.077-.163-3.02-.465L3 21l1.395-4.184C3.512 15.767 3 14.42 3 13c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>';
   var ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>';
   var ICON_SEND = '<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M2.94 2.94a1.5 1.5 0 011.66-.32l13 5.5a1.5 1.5 0 010 2.76l-13 5.5a1.5 1.5 0 01-2.08-1.83L3.9 10 2.52 4.77a1.5 1.5 0 01.42-1.83z"/></svg>';
@@ -298,6 +321,9 @@
     document.body.appendChild(root);
   }
 
+  // ---------------------------------------------------------------------------
+  // Main widget logic
+  // ---------------------------------------------------------------------------
   function initWidget() {
     var els = {
       teaser: root.querySelector("#ib-teaser"),
@@ -342,6 +368,7 @@
         var hrefStr = typeof href === "object" && href !== null ? href.href : href;
         var textStr = typeof href === "object" && href !== null ? (href.text || href.title || "") : (text || "");
         var rawHref = String(hrefStr || "");
+        // Only allow http(s) links through — blocks javascript:, data:, vbscript:, etc.
         var isSafeScheme = /^https?:\/\//i.test(rawHref) || /^\//.test(rawHref);
         var safeHref = (isSafeScheme ? rawHref : "#").replace(/"/g, "&quot;");
         var label = escapeHtml(textStr || safeHref);
@@ -350,17 +377,28 @@
       window.marked.setOptions({ gfm: true, breaks: true, renderer: renderer });
     }
 
+    // -------------------------------------------------------------------
+    // Tenant config
+    // -------------------------------------------------------------------
+    // Re-themes everything already built on var(--ib-*) — borders, message
+    // backgrounds, soft text, etc. A number of elements (notably the
+    // launcher button and some shadow/glow colors) are still hardcoded hex
+    // rather than variable-driven, so this covers most but not all of the
+    // widget's color surface. Widening that is a further pass, not done
+    // here — flagging honestly rather than silently leaving gaps.
     function applyTheme(theme) {
       if (!theme || typeof theme !== "object") return;
 
+      // Logo — independent of the color overrides below, so a tenant can
+      // set just a logo without needing to also override every color.
       var logoEl = root.querySelector("#ib-logo");
       if (logoEl) {
         var imageUrl = typeof theme.imageUrl === "string" ? theme.imageUrl.trim() : "";
-        var isSafeImageUrl = /^https:\/\//i.test(imageUrl);
+        var isSafeImageUrl = /^https:\/\//i.test(imageUrl); // https-only: this loads on every tenant's site, no mixed-content/plain-http exceptions
         if (isSafeImageUrl) {
           logoEl.src = imageUrl;
           logoEl.style.display = "";
-          logoEl.onerror = function () { logoEl.style.display = "none"; };
+          logoEl.onerror = function () { logoEl.style.display = "none"; }; // bad/dead URL — fail quiet, don't show a broken-image icon
         } else {
           logoEl.style.display = "none";
         }
@@ -377,22 +415,43 @@
         }
       });
 
+      // Corner roundness — plain integer px, clamped to a sane range so a
+      // tenant can't set something that breaks layout (e.g. a huge radius
+      // turning the panel into a blob) or inject anything but a number.
       if (typeof theme.borderRadius === "number" && isFinite(theme.borderRadius)) {
         var radius = Math.max(0, Math.min(40, Math.round(theme.borderRadius)));
         declarations.push("--ib-radius: " + radius + "px");
       }
 
+      // Which bottom corner the launcher/panel sit in. Implemented as two
+      // vars (one "auto", one a real value) rather than trying to swap
+      // which CSS property is used, since --ib-side-right/--ib-side-left
+      // are referenced directly by both `right:` and `left:` in the base
+      // stylesheet above — only one of them ends up doing anything at a time.
       if (theme.position === "bottom-left") {
         declarations.push("--ib-side-right: auto", "--ib-side-left: 24px");
       } else if (theme.position === "bottom-right") {
         declarations.push("--ib-side-right: 24px", "--ib-side-left: auto");
       }
 
+      // Launcher button shape — kept to a fixed keyword->value map rather
+      // than accepting a raw border-radius string, so this can't be used
+      // to smuggle arbitrary CSS through a field that looks like an enum.
       var launcherShapes = { circle: "50%", "rounded-square": "18px", square: "6px" };
       if (launcherShapes[theme.launcherShape]) {
         declarations.push("--ib-launcher-radius: " + launcherShapes[theme.launcherShape]);
       }
 
+      // Font family — the one theme field that's free text rather than a
+      // constrained value (hex color, number, fixed enum), so it needs its
+      // own sanitization rather than reusing the hex pattern above. This
+      // gets concatenated directly into a CSS declaration, so anything that
+      // isn't plainly a font-name list is rejected outright rather than
+      // attempting to escape it — this is deliberately conservative:
+      // letters, numbers, spaces, commas, hyphens, apostrophes, and quotes
+      // only (covers "Georgia", "Helvetica Neue", sans-serif, etc.),
+      // nothing that could close the declaration or introduce another
+      // property (no ";", "{", "}", "url(", or backslashes).
       if (typeof theme.fontFamily === "string") {
         var font = theme.fontFamily.trim();
         var isSafeFont = font.length > 0 && font.length <= 200 && /^[a-zA-Z0-9 ,\-'"]+$/.test(font);
@@ -405,15 +464,39 @@
       var existing = document.getElementById(overrideId);
       var styleEl = existing || document.createElement("style");
       styleEl.id = overrideId;
+      // Targets THIS instance's unique root id, not a shared "#ib-root" —
+      // see the INSTANCE_ID comment near the top of the file for why a
+      // shared id here is exactly what would let one tenant's theme
+      // override apply to a different tenant's widget on the same page.
       styleEl.textContent = "#" + ROOT_ID + "#" + ROOT_ID + " { " + declarations.join("; ") + "; }";
       if (!existing) document.head.appendChild(styleEl);
 
+      // Custom CSS — deliberately raw, unlike every field above. This is
+      // the intentional escape hatch for anything the structured theme
+      // fields don't cover (message-bubble details, custom animations,
+      // whatever). Set by whoever has admin access to this tenant's
+      // config, not by an end user talking to the widget, so this is
+      // trusted-input territory, not the same threat model as sanitizing
+      // a public chat message. Still stripped of the two ways raw text
+      // could escape the <style> element itself and start executing as
+      // markup/script instead of being parsed as CSS, as defense in depth
+      // against a pasted snippet that accidentally contains one of these
+      // rather than a deliberately malicious admin (who has plenty of
+      // other ways to cause damage with legitimate admin access anyway).
       var customCssId = "ib-theme-custom-css-" + INSTANCE_ID;
       var customCssEl = document.getElementById(customCssId);
       if (typeof theme.customCss === "string" && theme.customCss.trim()) {
         var safeCss = theme.customCss.replace(/<\/style/gi, "").replace(/<script/gi, "");
         var el = customCssEl || document.createElement("style");
         el.id = customCssId;
+        // @scope confines every selector inside to THIS instance's own
+        // root subtree (unique per-instance id, same reasoning as above)
+        // — a tenant writing "body { ... }" or ".ib-bubble-bot { ... }"
+        // only ever affects its own widget instance, never the host page
+        // or a different tenant's widget instance on the same page. This
+        // is a real CSS feature (not a hand-rolled selector rewrite), so
+        // nesting/media queries/pseudo-selectors in the tenant's CSS all
+        // keep working normally inside the scope.
         el.textContent = "@scope (#" + ROOT_ID + ") {\n" + safeCss + "\n}";
         if (!customCssEl) document.head.appendChild(el);
       } else if (customCssEl) {
@@ -437,10 +520,23 @@
           showTeaser(data.theme);
         })
         .catch(function () {
+          // No fake tenant-specific-looking content on failure — the widget
+          // still works without starter chips, that's better than showing
+          // generic questions that may have nothing to do with this tenant.
           tenantConfig.suggestedQuestions = [];
         });
     }
 
+    // Custom JS — the equivalent escape hatch to theme.customCss, for
+    // anything that isn't a visual style: adding an extra element, wiring
+    // up analytics, a "powered by" line, whatever a tenant's admin wants
+    // beyond what the structured config covers. Runs once per page load,
+    // after the config that would inform it (tenantId, theme) is already
+    // in place. Wrapped in try/catch so a broken snippet can't take the
+    // whole widget down — same trust model as customCss (set by whoever
+    // has admin access to this tenant, not by an end user chatting with
+    // the widget), but errors are still caught defensively since a JS
+    // exception is a lot more disruptive than a bad CSS rule would be.
     function runCustomJs(theme) {
       if (!theme || typeof theme.customJs !== "string" || !theme.customJs.trim()) return;
       var api = {
@@ -454,13 +550,26 @@
         close: function () { closePanel(); },
       };
       try {
+        // eslint-disable-next-line no-new-func -- deliberate: this is the
+        // one field in the whole config schema that's meant to run
+        // arbitrary tenant-authored code, by design (see comment above).
         var fn = new Function("ib", theme.customJs);
         fn(api);
       } catch (err) {
+        // Swallow rather than throw — a mistake in a tenant's custom
+        // snippet shouldn't break the chat widget itself. Still logged so
+        // it's discoverable from the browser console while debugging.
         console.error("[Insight Bot] custom JS error:", err);
       }
     }
 
+    // Proactive teaser bubble — see the CSS comment above for what this
+    // is. Dismissal (via the × or by clicking through to open the panel)
+    // is remembered in localStorage per-tenant so it doesn't nag on every
+    // page load once someone's already seen/dismissed it. Falls back to
+    // "just show it, don't persist" if localStorage is unavailable
+    // (private browsing, cross-origin iframe restrictions, etc.) rather
+    // than failing loudly over a non-essential feature.
     function teaserStorageKey() { return "ib-teaser-dismissed-" + TENANT_ID; }
     function isTeaserDismissed() {
       try { return localStorage.getItem(teaserStorageKey()) === "1"; } catch (e) { return false; }
@@ -468,7 +577,7 @@
     function dismissTeaser(persist) {
       els.teaser.classList.remove("ib-teaser-visible");
       if (persist) {
-        try { localStorage.setItem(teaserStorageKey(), "1"); } catch (e) { }
+        try { localStorage.setItem(teaserStorageKey(), "1"); } catch (e) { /* non-essential, ignore */ }
       }
     }
     function showTeaser(theme) {
@@ -478,6 +587,8 @@
       els.teaser.classList.toggle("ib-pos-left", theme.position === "bottom-left");
       var delay = typeof theme.teaserDelayMs === "number" && theme.teaserDelayMs >= 0 ? theme.teaserDelayMs : 1500;
       setTimeout(function () {
+        // Don't pop up over a conversation the visitor already started on
+        // their own during the delay window.
         if (els.panel.classList.contains("ib-open")) return;
         els.teaser.classList.add("ib-teaser-visible");
       }, delay);
@@ -491,6 +602,9 @@
       openPanel();
     });
 
+    // -------------------------------------------------------------------
+    // Open / close / minimize / maximize
+    // -------------------------------------------------------------------
     function openPanel() {
       els.panel.classList.add("ib-open");
       els.panel.classList.remove("ib-maximized");
@@ -499,7 +613,7 @@
       els.maximizeBtn.innerHTML = ICON_MAXIMIZE;
       els.maximizeBtn.title = "Maximize";
       els.input.focus();
-      dismissTeaser(false);
+      dismissTeaser(false); // hide (not permanently dismiss) whenever the panel opens by any route
       if (!panelOpenedOnce) {
         panelOpenedOnce = true;
         restoreOrStartChat();
@@ -522,6 +636,9 @@
       els.maximizeBtn.title = nowMax ? "Minimize" : "Maximize";
     });
 
+    // -------------------------------------------------------------------
+    // Textarea + send/stop button
+    // -------------------------------------------------------------------
     els.input.addEventListener("input", function () {
       els.input.style.height = "auto";
       els.input.style.height = Math.min(els.input.scrollHeight, 96) + "px";
@@ -551,9 +668,13 @@
       els.sendBtn.classList.toggle("ib-stop-mode", streaming);
       els.sendBtn.innerHTML = streaming ? ICON_STOP : ICON_SEND;
       els.sendBtn.setAttribute("aria-label", streaming ? "Stop" : "Send");
-      els.sendBtn.disabled = false;
+      els.sendBtn.disabled = false; // stays clickable in both states (click = send OR stop)
     }
 
+    // -------------------------------------------------------------------
+    // Scroll handling: never force-scroll while the user has scrolled up to
+    // read earlier content. Show a floating down-arrow instead.
+    // -------------------------------------------------------------------
     function isNearBottom() {
       var m = els.messages;
       return m.scrollHeight - m.scrollTop - m.clientHeight < 80;
@@ -583,6 +704,9 @@
     });
     els.scrollDownBtn.addEventListener("click", scrollToBottomForce);
 
+    // -------------------------------------------------------------------
+    // Bubble helpers
+    // -------------------------------------------------------------------
     function createRow(role) {
       var row = document.createElement("div");
       row.className = "ib-row" + (role === "user" ? " ib-row-user" : " ib-row-bot");
@@ -619,6 +743,7 @@
       }
     }
 
+    // Copy-message button, added under a completed assistant bubble
     function addCopyButton(wrapEl, getText) {
       var actions = document.createElement("div");
       actions.className = "ib-msg-actions";
@@ -653,53 +778,40 @@
       ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); } catch (e) { }
+      try { document.execCommand("copy"); } catch (e) { /* best effort */ }
       document.body.removeChild(ta);
     }
 
     function renderSuggestedQuestionsOnly(questions) {
-      // Centered intro bubble — "Hello, I am your Research Assistant..."
-      var introRow = document.createElement("div");
-      introRow.className = "ib-intro-row";
-      var introBubble = document.createElement("div");
-      introBubble.className = "ib-intro-bubble";
-      var greetText = (tenantConfig && tenantConfig.subtitle)
-        ? "\uD83D\uDC4B Hello! I am your " + tenantConfig.subtitle + ". Ask me about " + (tenantConfig.title || "our") + "'s."
-        : "\uD83D\uDC4B Hello! I am your Research Assistant. Ask me a question about the data.";
-      introBubble.textContent = greetText;
-      introRow.appendChild(introBubble);
-      els.messages.appendChild(introRow);
-
-      // Centered "Try asking:" label + full-width, centered, vertically
-      // stacked suggestion buttons (each 85% width) instead of a wrapped
-      // chip row.
-      var suggestRow = document.createElement("div");
-      suggestRow.className = "ib-suggest-row";
+      var row = document.createElement("div");
+      row.className = "ib-row";
       var label = document.createElement("div");
       label.className = "ib-chips-label";
       label.textContent = "Try asking:";
-      suggestRow.appendChild(label);
+      row.appendChild(label);
       var chipWrap = document.createElement("div");
-      chipWrap.className = "ib-chips-vertical";
+      chipWrap.className = "ib-chips";
       var list = questions && questions.length ? questions : ["What are the key findings?", "Show me a chart of the main results", "Summarize the top takeaways"];
       shuffle(list).slice(0, 4).forEach(function (q) {
         var btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "ib-chip-full";
+        btn.className = "ib-chip";
         btn.textContent = q;
         btn.addEventListener("click", function () {
-          suggestRow.remove();
-          introRow.remove();
+          row.remove();
           sendMessage(q);
         });
         chipWrap.appendChild(btn);
       });
-      suggestRow.appendChild(chipWrap);
-      els.messages.appendChild(suggestRow);
+      row.appendChild(chipWrap);
+      els.messages.appendChild(row);
       maybeAutoScroll();
     }
 
-    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior researcher 💭...", "Compiling dataset 📈... ", "Parsing metadata 📁... "];
+    // -------------------------------------------------------------------
+    // Status indicator
+    // -------------------------------------------------------------------
+    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior consultant 💭..."];
     function typingIndicator() {
       var bubble = createRow("bot");
       bubble.innerHTML =
@@ -718,6 +830,15 @@
       if (id) clearInterval(Number(id));
     }
 
+    // -------------------------------------------------------------------
+    // Follow-ups: prefer the model's own dynamically-generated followups
+    // (parsed out of its response — works for ANY tenant/dataset without
+    // manual curation). If the model doesn't comply, fall back to (1) word-
+    // overlap scoring against the tenant's static suggested_questions, and
+    // only if THAT finds nothing relevant, (2) synthesize questions from
+    // notable terms actually present in the answer, rather than a pure
+    // random pick — so "no good match" still feels grounded, not arbitrary.
+    // -------------------------------------------------------------------
     var STOPWORDS = ["the", "a", "an", "of", "and", "or", "is", "are", "was", "were", "in", "on", "for", "to", "by", "with", "as", "what", "whats", "how", "show", "me", "does", "do", "compare", "vs", "this", "that", "these", "those", "it", "its", "at", "be", "has", "have", "had", "we", "you", "your", "our"];
     function tokenize(str) {
       return (str || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(function (w) { return w.length >= 2 && STOPWORDS.indexOf(w) === -1; });
@@ -727,6 +848,9 @@
       for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; }
       return a;
     }
+    // Pulls out notable capitalized phrases (e.g. "Downtown Flagship", "Healthcare")
+    // and number+label pairs (e.g. "4.4 satisfaction") from the raw answer text —
+    // used only as a last-resort seed for synthesized follow-ups.
     function extractNotableTerms(text) {
       var seen = {};
       var terms = [];
@@ -773,6 +897,8 @@
         return ordered.slice(0, count).map(function (q) { return q.text; });
       }
 
+      // No overlap found in the curated pool — synthesize from the answer's own
+      // notable terms instead of returning a fully arbitrary random pick.
       var synthesized = synthesizeFollowups(contextText, count, askedLower);
       if (synthesized.length >= count) return synthesized;
       var filler = shuffle(pool).slice(0, count - synthesized.length);
@@ -798,6 +924,14 @@
       maybeAutoScroll();
     }
 
+    // -------------------------------------------------------------------
+    // Charts
+    // -------------------------------------------------------------------
+    // First 4 slots track the tenant's actual theme (resolved to real hex
+    // at call time, not left as "var(--ib-accent)" strings — those break
+    // when concatenated with an alpha suffix below, e.g. "var(--ib-accent)"
+    // + "cc" is not a valid color). Remaining slots are fixed accents for
+    // datasets beyond what the theme colors alone can distinguish.
     var CHART_COLORS_FIXED_TAIL = ["#0a2f09", "#dc2626", "#6366f1", "#4f46e5", "#10b981", "#f59e0b"];
     function getChartColors() {
       var computed = root ? getComputedStyle(root) : null;
@@ -860,6 +994,16 @@
       btn.innerHTML = ICON_CHECK;
       setTimeout(function () { btn.innerHTML = original; }, 1200);
     }
+    // -------------------------------------------------------------------
+    // Automation form — triggered by a renderForm block from /api/chat
+    // (see splitIntoSegments above). Deliberately blank, not pre-filled
+    // from conversation context: a value the user typed themselves is
+    // unambiguous, one silently pulled from earlier in the chat requires
+    // them to notice, read, and correct it if wrong. Submits as one plain
+    // request to /api/automation-submit — there's no chat-message-based
+    // back-and-forth for this at all, so nothing here can be misread as a
+    // digression or a cancel the way the old per-field flow could.
+    // -------------------------------------------------------------------
     function renderAutomationForm(config) {
       var card = document.createElement("div");
       card.className = "ib-form-card";
@@ -905,6 +1049,10 @@
       submitBtn.textContent = "Send";
 
       submitBtn.addEventListener("click", function () {
+        // Client-side required-field check first — instant feedback,
+        // no network round trip needed just to say "this is empty".
+        // The real, authoritative validation still happens server-side
+        // in /api/automation-submit before anything executes.
         var missing = (config.fields || []).filter(function (f) {
           return f.required && !inputs[f.key].value.trim();
         });
@@ -1021,6 +1169,11 @@
       return wrap;
     }
 
+    // -------------------------------------------------------------------
+    // Segment splitting: extracts BOTH the optional chart block and the
+    // always-present (once complete) hidden followups block. Neither is
+    // ever shown to the user as raw JSON, even mid-stream.
+    // -------------------------------------------------------------------
     function splitIntoSegments(rawText) {
       var text = rawText;
       var lastFenceOpen = text.lastIndexOf("```json");
@@ -1036,7 +1189,7 @@
       while ((match = fenceRegex.exec(text)) !== null) {
         if (match.index > lastIndex) segments.push({ type: "text", content: text.slice(lastIndex, match.index) });
         var parsed = null;
-        try { parsed = JSON.parse(match[1].trim()); } catch (e) { }
+        try { parsed = JSON.parse(match[1].trim()); } catch (e) { /* not valid JSON */ }
 
         if (parsed && parsed.renderChart === true) {
           segments.push({ type: "chart", config: parsed });
@@ -1044,8 +1197,11 @@
           segments.push({ type: "form", config: parsed.renderForm });
         } else if (parsed && Array.isArray(parsed.followups)) {
           followups = parsed.followups.filter(function (q) { return typeof q === "string" && q.trim(); });
+          // intentionally NOT pushed to segments — never rendered as visible text
         } else if (parsed) {
+          // Some other JSON block the model emitted — hide rather than leak raw JSON
         } else {
+          // Not parseable JSON at all — treat as genuine text content (rare)
           segments.push({ type: "text", content: match[0] });
         }
         lastIndex = fenceRegex.lastIndex;
@@ -1076,13 +1232,15 @@
           var renderedHtml = typeof window.marked !== "undefined" ? window.marked.parse(seg.content) : escapeHtml(seg.content);
           div.innerHTML = typeof window.DOMPurify !== "undefined"
             ? window.DOMPurify.sanitize(renderedHtml, { ADD_ATTR: ["target"] })
-            : escapeHtml(seg.content);
+            : escapeHtml(seg.content); // DOMPurify failed to load — fail safe to plain text, never raw HTML
           convertLinksToButtons(div);
           container.appendChild(div);
         }
       });
       return result.followups;
     }
+    // Plain-text version of a rendered answer (for the copy-message button) —
+    // strips the hidden JSON blocks the same way, but keeps readable text.
     function extractPlainText(rawText) {
       var result = splitIntoSegments(rawText);
       return result.segments
@@ -1091,6 +1249,10 @@
         .join("\n\n");
     }
 
+    // -------------------------------------------------------------------
+    // Errors — always generic/friendly to the user; technical detail (if any
+    // is available client-side at all) only ever goes to console.error.
+    // -------------------------------------------------------------------
     function renderRetryableError(bubble, technicalDetailForConsole) {
       if (technicalDetailForConsole) console.error("Insight Bot:", technicalDetailForConsole);
       stopStatusCycle(bubble);
@@ -1119,6 +1281,9 @@
 
     var GREETING_RE = /^(hi|hello|hey|hiya|yo|greetings|good morning|good afternoon|good evening)(\s+there)?[!.\s]*$/i;
 
+    // -------------------------------------------------------------------
+    // Chat persistence — save/restore/switch/delete/new
+    // -------------------------------------------------------------------
     function persistCurrentChat() {
       if (conversation.length === 0) return;
       var chats = loadAllChats();
@@ -1299,6 +1464,9 @@
       startNewChat();
     });
 
+    // -------------------------------------------------------------------
+    // Send + stream
+    // -------------------------------------------------------------------
     function fetchChatStream(payload, signal) {
       var body = JSON.stringify(payload);
       var headers = { "Content-Type": "application/json" };
