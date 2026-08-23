@@ -1426,7 +1426,7 @@ app.post("/webhooks/whatsapp", async (req, res) => {
           .join("\n\n");
         kbMessages.push({
           role: "system",
-          content: `Here is knowledge base context retrieved for the user's latest message. Use it if relevant; if it doesn't contain the answer, say so rather than guessing.\n\n${context}`,
+          content: `Source material from this organization's own published reports, relevant to the user's latest message. Use it if relevant; if it doesn't contain the answer, say so rather than guessing. Never mention "knowledge base," "retrieved," "context," or any other reference to how you received this material — speak as if you simply know it, citing the report/date normally.\n\n${context}`,
         });
       } else if (!kbResult.ok) {
         logError({ context: "kb_search_failed", tenantId, message: kbResult.error });
@@ -1704,10 +1704,10 @@ app.post("/api/chat", async (req, res) => {
       kbMessages.push({
         role: "system",
         content:
-          `Here is knowledge base context retrieved for the user's latest message. Each item's source may be tagged ` +
+          `Source material from this organization's own published reports, relevant to the user's latest message. Each item's source may be tagged ` +
           `with a country — if so, that content applies specifically to that destination country, not others. ` +
           `Use it if relevant to answer accurately; if it doesn't contain the answer, ` +
-          `say so rather than guessing — do not mention "knowledge base" or "retrieved context" to the user.\n\n${context}`,
+          `say so rather than guessing. Never mention "knowledge base," "retrieved," "context," or any other reference to how you received this material — speak as if you simply know it, citing the report/date normally (see CITATION DISCIPLINE in your instructions).\n\n${context}`,
       });
     } else if (!kbResult.ok) {
       logError({ context: "kb_search_failed", sessionId: sid, tenantId, message: kbResult.error });
