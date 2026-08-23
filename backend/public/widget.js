@@ -1,6 +1,6 @@
 /**
  * Insight Bot — Embeddable Widget (self-mounting, single-file)
- * ---------------------------------------------------------------
+ * --------------------------------------------------------------
  * Drop this on any tenant page with ONE script tag:
  *   <script src="https://your-backend.example.com/widget.js" data-tenant="acme-retail" data-tenant-key="..."></script>
  *
