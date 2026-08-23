@@ -274,6 +274,12 @@ _TOC_LABEL_RE = re.compile(r"(?im)^\s*\**\s*(table of contents|contents)\s*\**\s
 _NUMBERED_LINE_RE = re.compile(r"^\s*\**\s*(\d+)\\?\.\s+(\S.*?)\**\s*$")
 _MIN_TOC_ENTRIES = 3  # fewer than this and it's not worth trusting as a real TOC
 
+# Matches a Markdown heading line ("## Heading text" or "### Heading
+# text"), optionally with trailing #'s (some generators/editors close
+# headings that way) or trailing whitespace. Captures the level (number of
+# #'s) in group 1, heading text in group 2.
+_MD_HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
+
 
 def _detect_toc_headings(full_text: str, max_scan_lines: int = 400) -> list:
     """Returns the ordered list of heading strings this document's own
@@ -309,13 +315,68 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len] or "section"
 
 
+def _split_by_markdown_headings(full_text: str) -> list:
+    """Splits full_text at Markdown headings. PRIMARY section-detection
+    method — tries this before the numbered-TOC method below, since it's
+    what virtually every hand-written or generated Markdown document
+    (including every file this platform's own ingestion prep script
+    produces) actually looks like, with no separate "Table of Contents"
+    listing needed at all.
+
+    Adaptive heading level: prefers h2 ("## ...") since that's the common
+    convention (h1 reserved for the document's own title, appearing once
+    at the top), but different sources format differently — some use h3
+    throughout with no h2 at all, some use h1 for every section. Rather
+    than hardcoding one level and silently failing to split anything for a
+    document that consistently uses a different one, this counts how many
+    headings exist at each level and picks whichever level has the most
+    (minimum 2 to be worth splitting on), so a structurally different but
+    still-consistent document still gets split correctly instead of
+    falling back to one giant chunk."""
+    lines = full_text.splitlines()
+    by_level = {1: [], 2: [], 3: []}
+    for i, line in enumerate(lines):
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            by_level[len(m.group(1))].append((i, m.group(2).strip()))
+
+    # Prefer h2 on a tie with another level — it's the more common/expected
+    # convention, so a document with e.g. 3 h2's and 3 h3's (a false-positive
+    # h3 or two inside body text) should still split on the h2 structure.
+    best_level = max((2, 3, 1), key=lambda lvl: (len(by_level[lvl]), lvl == 2))
+    heading_positions = by_level[best_level]
+    if len(heading_positions) < 2:
+        return []
+
+    sections = []
+    for idx, (line_i, heading) in enumerate(heading_positions):
+        end_line = heading_positions[idx + 1][0] if idx + 1 < len(heading_positions) else len(lines)
+        body = "\n".join(lines[line_i:end_line]).strip()
+        if body:
+            sections.append((heading, body))
+
+    front_matter = "\n".join(lines[: heading_positions[0][0]]).strip()
+    if front_matter:
+        sections.insert(0, ("Front Matter", front_matter))
+
+    return sections
+
+
 def split_into_sections(full_text: str) -> list:
-    """Splits full_text into (heading, body_text) tuples along this
-    document's own declared TOC headings. Returns [] if no reliable TOC is
-    detected, OR if fewer body headings could be matched than the TOC
-    promised (formatting doesn't line up cleanly enough to trust) — either
-    way the caller should fall back to whole-document chunking rather than
-    guess at a partial split."""
+    """Splits full_text into (heading, body_text) tuples. Tries, in order:
+    1. Direct Markdown h2 heading splitting (_split_by_markdown_headings) —
+       the common case for essentially all real content this platform
+       ingests.
+    2. A document's own declared numbered Table of Contents, if it has one
+       (rare for Markdown, more common in PDF/DOCX-sourced text where a
+       literal contents listing got preserved).
+    Returns [] if neither method finds anything reliable — the caller
+    should fall back to whole-document chunking rather than guess at a
+    partial split."""
+    md_sections = _split_by_markdown_headings(full_text)
+    if md_sections:
+        return md_sections
+
     toc_headings = _detect_toc_headings(full_text)
     if not toc_headings:
         return []
