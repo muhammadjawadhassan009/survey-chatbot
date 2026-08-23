@@ -38,6 +38,7 @@ const { kvGet, kvSet, kvDelete, kvAppendAndCountRecent, kvCountRecent, isRedisAc
 const kbClient = require("./lib/kbClient");
 const responseCache = require("./lib/responseCache");
 const tenantStore = require("./lib/tenantStore");
+const db = require("./lib/db");
 const activityStore = require("./lib/activityStore");
 const { resolveProviderEntry, streamFromProviderChain, providerSemaphore } = require("./lib/providerChain");
 const { sanitizeMessages } = require("./lib/sanitizeMessages");
@@ -391,6 +392,36 @@ async function buildTenantsMap() {
           "service and this backend before that URL is reachable from anywhere but Railway's private network."
       );
     }
+
+    // Self-healing schema migration — runs on every single boot, not just
+    // once via a manual one-off command. This exists because
+    // analytics_events (added well after the original schema) went
+    // missing TWICE: once because the initial schema.sql update was never
+    // actually run against the live database, and a second time for a
+    // still-unconfirmed reason (a volume reset? manual intervention?)
+    // despite Postgres itself never having redeployed in between. Rather
+    // than manually re-running a fix each time this class of problem
+    // recurs, every boot now re-applies the full CREATE TABLE IF NOT
+    // EXISTS schema unconditionally — a complete no-op in the normal case
+    // (every table already exists), and full automatic recovery in the
+    // abnormal one. Runs before buildTenantsMap() since that also reads
+    // from the DB (the tenants table itself).
+    if (tenantStore.isConfigured()) {
+      try {
+        const schemaSql = fs.readFileSync(path.join(__dirname, "db", "schema.sql"), "utf8");
+        await db.query(schemaSql);
+        console.log("✅ Database schema verified/applied (self-healing migration — see comment above).");
+      } catch (err) {
+        // Not fatal on its own — if the tables genuinely already exist and
+        // this only failed on something cosmetic (a permissions quirk on
+        // an index, say), the app can likely still run. If a REQUIRED
+        // table is actually missing, buildTenantsMap() right below will
+        // fail loudly and stop the process anyway, which is the correct
+        // outcome for that case.
+        console.error("⚠️  Schema migration failed (continuing — buildTenantsMap will fail loudly next if this was fatal):", err.message);
+      }
+    }
+
     tenants = await buildTenantsMap();
     startServer();
   } catch (err) {
@@ -688,7 +719,7 @@ app.get("/api/admin/status", adminAuth, async (req, res) => {
 
   if (tenantStore.isConfigured()) {
     try {
-      await require("./lib/db").query("SELECT 1");
+      await db.query("SELECT 1");
       status.db = "connected";
     } catch {
       status.db = "error";
