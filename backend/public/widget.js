@@ -1,6 +1,6 @@
 /**
  * Insight Bot — Embeddable Widget (self-mounting, single-file)
- * --------------------------------------------------------------
+ * ---------------------------------------------------------------
  * Drop this on any tenant page with ONE script tag:
  *   <script src="https://your-backend.example.com/widget.js" data-tenant="acme-retail" data-tenant-key="..."></script>
  *
@@ -125,7 +125,7 @@
     ".ib-panel { position: fixed; bottom: 92px; right: var(--ib-side-right); left: var(--ib-side-left); z-index: 999999; width: min(420px, 94vw); height: min(680px, 80vh); background: #ffffff; border-radius: var(--ib-radius); box-shadow: 0 24px 80px color-mix(in srgb, var(--ib-text) 12%, transparent), 0 0 0 1px color-mix(in srgb, var(--ib-text) 6%, transparent); display: flex; flex-direction: column; overflow: hidden; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(20px) scale(.96); transform-origin: bottom right; transition: opacity .25s ease, transform .25s cubic-bezier(.22,1,.36,1); }\n" +
     ".ib-panel.ib-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); }\n" +
     ".ib-panel.ib-maximized { width: min(720px, 96vw); top: 20px; bottom: 20px; height: auto; }\n" +
-    "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } .ib-teaser { display: none; } }\n" +
+    "@media (max-width: 480px) { .ib-panel { right: 8px; left: 8px; bottom: 84px; width: auto; height: min(600px, 78vh); border-radius: 20px; } .ib-launcher { bottom: 16px; right: 16px; left: auto; } .ib-teaser { display: none; } .ib-msg-content .ib-link-btn { padding: 5px 11px; font-size: 11.5px; gap: 4px; } }\n" +
     // Proactive teaser bubble — the "line outside the box before opening"
     // pattern popular chat widgets (Intercom/Fin, Drift, etc.) use to
     // invite a click instead of waiting passively for one. Positioned via
@@ -160,7 +160,7 @@
     ".ib-bubble-user { background: var(--ib-accent); color: #fff; border-bottom-right-radius: 6px; box-shadow: 0 4px 12px color-mix(in srgb, var(--ib-accent) 30%, transparent); }\n" +
     ".ib-bubble-bot { background: #fff; color: var(--ib-text); border-bottom-left-radius: 6px; box-shadow: 0 1px 3px color-mix(in srgb, var(--ib-text) 4%, transparent); border: 1px solid var(--ib-border); }\n" +
     ".ib-msg-content { overflow-x: auto; }\n" +
-    ".ib-msg-content .ib-link-btn { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #000; border: 1px solid var(--ib-border); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 500; text-decoration: none; transition: all .15s ease; box-shadow: 0 1px 2px rgba(0,0,0,.04); }\n" +
+    ".ib-msg-content .ib-link-btn { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #000; border: 1px solid var(--ib-border); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 500; text-decoration: none; transition: all .15s ease; box-shadow: 0 1px 2px rgba(0,0,0,.04); max-width: 100%; white-space: normal; word-break: break-word; }\n" +
     ".ib-msg-content .ib-link-btn:hover { background: var(--ib-accent-soft); border-color: var(--ib-accent); transform: translateY(-1px); box-shadow: 0 2px 8px color-mix(in srgb, var(--ib-text) 8%, transparent); }\n" +
     ".ib-msg-content table { width: max-content; min-width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }\n" +
     ".ib-msg-content th, .ib-msg-content td { border: 1px solid var(--ib-border); padding: 8px 12px; text-align: left; color: #000; }\n" +
