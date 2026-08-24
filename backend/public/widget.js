@@ -787,7 +787,7 @@
       row.className = "ib-row";
       var label = document.createElement("div");
       label.className = "ib-chips-label";
-      label.textContent = "Try asking:";
+      label.textContent = "What would you like to know?";
       row.appendChild(label);
       var chipWrap = document.createElement("div");
       chipWrap.className = "ib-chips";
