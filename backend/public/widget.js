@@ -811,7 +811,7 @@
     // -------------------------------------------------------------------
     // Status indicator
     // -------------------------------------------------------------------
-    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior consultant 💭..."];
+    var STATUS_MESSAGES = ["Thinking 🤔...", "Analyzing 🧠...", "Asking to senior Researcher 💭...", "Compiling analysis..."];
     function typingIndicator() {
       var bubble = createRow("bot");
       bubble.innerHTML =
