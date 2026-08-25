@@ -84,7 +84,19 @@ _dedicated_collections_ensured = set()  # (url, collection) already set up
 def get_embed_model():
     global _embed_model
     if _embed_model is None:
-        _embed_model = FastEmbedEmbedding(model_name=config.EMBED_MODEL)
+        # cache_dir MUST point into the persistent volume (config.STORAGE_DIR,
+        # mounted at /app/storage — see the volume mount in Railway's
+        # service config), not fastembed's own default location. Without
+        # this, every cold process start (Railway scaling this service
+        # down after inactivity, or any redeploy) re-downloads the ONNX
+        # model files from HuggingFace from scratch — the "Fetching 5
+        # files..." progress bars you'd see in the boot logs — which takes
+        # several seconds and was blowing straight through the KB search
+        # timeout on whatever request happened to be the first one after a
+        # cold start. With the cache on the persistent volume, the
+        # download only ever happens once, ever, for this service.
+        print(f"Loading embedding model '{config.EMBED_MODEL}', cache_dir={config.FASTEMBED_CACHE_DIR} (verify this is on the persistent volume, not an ephemeral path, if a cold start still re-downloads)")
+        _embed_model = FastEmbedEmbedding(model_name=config.EMBED_MODEL, cache_dir=str(config.FASTEMBED_CACHE_DIR))
     return _embed_model
 
 
