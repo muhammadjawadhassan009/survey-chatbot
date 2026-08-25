@@ -37,5 +37,7 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", "
 # reachable by anything other than your trusted backend.
 KB_SERVICE_API_KEY = os.getenv("KB_SERVICE_API_KEY") or None
 
-for d in (STORAGE_DIR, QDRANT_LOCAL_PATH, DOCSTORE_DIR, FILES_DIR, UPLOAD_TMP_DIR):
+FASTEMBED_CACHE_DIR = STORAGE_DIR / "fastembed_cache"
+
+for d in (STORAGE_DIR, QDRANT_LOCAL_PATH, DOCSTORE_DIR, FILES_DIR, UPLOAD_TMP_DIR, FASTEMBED_CACHE_DIR):
     d.mkdir(parents=True, exist_ok=True)
