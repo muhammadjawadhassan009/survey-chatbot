@@ -17,15 +17,21 @@ a documented no-op on embedded/local Qdrant mode (dev); filtering
 correctness still works locally regardless, the disk co-location
 performance benefit only shows up on real server/cloud Qdrant.
 
-Section-aware chunking: a file is no longer always one document. If the
-file declares its own Table of Contents (a "Table of Contents" / "Contents"
-line followed by a run of "1. Heading", "2. Heading", ... lines — the
-pattern used by these knowledge-base exports), each TOC entry becomes its
-own document before chunking, so SentenceSplitter can never blend two
-different topics into one chunk. Files without that structure fall back to
-being treated as one whole document, exactly as before — this can only
-improve chunking quality, never make it worse, for files that don't have a
-detectable TOC.
+Section-aware chunking: a file is no longer always one document. Every
+Markdown (.md/.markdown) file is read as raw text (not through
+SimpleDirectoryReader's default extractor — see the .md branch in
+ingest_file for why) and split at its own heading structure ("## Heading",
+adaptively picking whichever heading level is actually used consistently),
+which is the PRIMARY and most common case. Failing that, a file that
+declares its own numbered Table of Contents (a "Table of Contents" /
+"Contents" line followed by a run of "1. Heading", "2. Heading", ... lines
+— common in PDF/DOCX-sourced text where a literal contents listing
+survived extraction) is split on that instead. Each detected section
+becomes its own document before chunking, so SentenceSplitter can never
+blend two different topics into one chunk. Files where neither method
+finds anything reliable fall back to being treated as one whole document,
+exactly as before — this can only improve chunking quality, never make it
+worse, for files that don't have detectable structure.
 
 Because of this, one filename can now map to MULTIPLE underlying doc_ids
 (one per detected section, or a single one for files without a TOC). The
@@ -491,9 +497,28 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
     Persists a copy of the original file to config.FILES_DIR so a later
     re-index doesn't require asking the user to re-upload."""
 
-    reader = SimpleDirectoryReader(input_files=[str(file_path)])
-    raw_docs = reader.load_data()
-    full_text = "\n\n".join(d.text for d in raw_docs if d.text and d.text.strip())
+    # .md/.markdown files are special-cased to a direct raw read rather than
+    # going through SimpleDirectoryReader's default extractor. The reason:
+    # llama-index's built-in MarkdownReader parses the file AS markdown and
+    # strips the leading "#"/"##"/"###" heading markers from the returned
+    # text entirely (e.g. "## How Americans View Data Privacy" comes back as
+    # just "How Americans View Data Privacy") — verified empirically, not
+    # assumed. _split_by_markdown_headings() above is the PRIMARY
+    # section-detection method and it matches on those exact "#" characters,
+    # so every .md file ingested through the default extractor silently lost
+    # its only usable structure before section-splitting ever ran, always
+    # fell through to the TOC-label method (which needs a literal "Table of
+    # Contents" line these files don't have either), found nothing there
+    # either, and landed on the single-whole-file fallback with the "no
+    # reliable TOC detected" warning — for every .md file, not some of them.
+    # Reading the file directly keeps the "#" markers intact so the heading
+    # splitter actually sees what it's designed to look for.
+    if file_path.suffix.lower() in (".md", ".markdown"):
+        full_text = file_path.read_text(encoding="utf-8", errors="replace").strip()
+    else:
+        reader = SimpleDirectoryReader(input_files=[str(file_path)])
+        raw_docs = reader.load_data()
+        full_text = "\n\n".join(d.text for d in raw_docs if d.text and d.text.strip())
 
     if not full_text.strip():
         return {"filename": original_filename, "status": "skipped", "reason": "No extractable text found"}
@@ -505,12 +530,12 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
     new_entries, toc_detected = _unique_doc_ids(tenant_id, registry_key, full_text)
     new_doc_ids = {doc_id for doc_id, _heading, _body in new_entries}
     if not toc_detected:
-        # Not necessarily wrong — some files genuinely have no TOC — but for
-        # a batch of files expected to share a similar structure (e.g. one
-        # visa-type template repeated per country), this usually means that
-        # file's formatting drifted enough that section-splitting couldn't
-        # trust it, and it silently fell back to one whole-file chunk.
-        print(f"⚠️  No reliable TOC detected for {tenant_id}/{registry_key} — ingested as a single whole-file chunk, not section-split. Check its Table of Contents formatting if this is unexpected.")
+        # Not necessarily wrong — some files genuinely have no detectable
+        # structure — but for a batch of files expected to share a similar
+        # format, this usually means the file's Markdown headings and/or
+        # numbered Table of Contents don't match what split_into_sections()
+        # looks for, and it silently fell back to one whole-file chunk.
+        print(f"⚠️  No section structure detected for {tenant_id}/{registry_key} (checked both Markdown headings and a numbered Table of Contents) — ingested as a single whole-file chunk, not section-split.")
 
     # Clean up any doc_ids this filename owned previously but no longer
     # produces (a section was renamed, merged, or removed) — otherwise
