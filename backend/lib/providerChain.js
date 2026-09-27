@@ -117,6 +117,20 @@ class KeyedSemaphore {
 }
 const providerSemaphore = new KeyedSemaphore(MAX_CONCURRENT_PER_KEY);
 
+// Two-stage timeout, not one flat one. The old code used a single 55s timer
+// for the ENTIRE attempt (connect through last byte) — meaning a hung/queued
+// free-tier model burned a full 55s before failover even started, but a
+// model that was actively streaming a long, detailed answer (tables, etc.)
+// was *also* at risk of being killed mid-stream if the whole response simply
+// took longer than the timer, which is a real answer being thrown away, not
+// a hang. Splitting it in two fixes both: CONNECT_TIMEOUT_MS bounds how long
+// we wait with zero bytes back (a hung/queued provider fails over fast);
+// STALL_TIMEOUT_MS is a rolling timer reset on every chunk received, so an
+// actively-streaming response — however long overall — is never killed for
+// simply being long, only for going silent mid-stream.
+const PROVIDER_CONNECT_TIMEOUT_MS = Number(process.env.PROVIDER_CONNECT_TIMEOUT_MS) || 15000;
+const PROVIDER_STALL_TIMEOUT_MS = Number(process.env.PROVIDER_STALL_TIMEOUT_MS) || 30000;
+
 async function streamFromProviderChain(providerChain, payloadMessagesBuilder, res, clientAbortSignal) {
   let lastError = null;
   // One entry per provider actually attempted (skips don't count — a
@@ -151,7 +165,9 @@ async function streamFromProviderChain(providerChain, payloadMessagesBuilder, re
     const controller = new AbortController();
     const onClientAbort = () => controller.abort();
     if (clientAbortSignal) clientAbortSignal.addEventListener("abort", onClientAbort);
-    const timeout = setTimeout(() => controller.abort(), 55000);
+    // Starts as the connect/time-to-first-byte budget; rearmed to the (longer)
+    // stall budget on every chunk received in the read loop below.
+    let timeout = setTimeout(() => controller.abort(), PROVIDER_CONNECT_TIMEOUT_MS);
 
     let fullResponseText = "";
     let finishReason = null;
@@ -234,6 +250,13 @@ async function streamFromProviderChain(providerChain, payloadMessagesBuilder, re
       readLoop: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        // Progress — a chunk of SOME kind arrived (even a keepalive/partial
+        // SSE fragment), so this attempt is no longer "hung." Rearm with the
+        // stall budget, not the shorter connect budget, so a long-but-active
+        // stream keeps getting fresh time instead of racing a stale clock.
+        clearTimeout(timeout);
+        timeout = setTimeout(() => controller.abort(), PROVIDER_STALL_TIMEOUT_MS);
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
