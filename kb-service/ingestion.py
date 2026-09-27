@@ -40,6 +40,7 @@ collection.
 import json
 import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -763,9 +764,22 @@ def search(tenant_id: str, query: str, top_k: int = 5, country: str = None, cate
     # the query and merge by node id, keeping each node's best score. Runs
     # inline on every live search call — no ingestion-time changes needed.
     variants = generate_query_variants(query)
+    # Each variant needs its own embedding computation AND its own Qdrant
+    # round trip — with up to 4 variants (any query containing a number or
+    # "%", which is most survey questions), doing this one at a time
+    # multiplied the whole search's latency by up to 4x. FastEmbed's ONNX
+    # inference and the Qdrant client's HTTP call both spend most of their
+    # time outside the GIL, so a small thread pool turns this into one
+    # round trip's worth of wall-clock time instead of N.
+    if len(variants) == 1:
+        retrieved_lists = [retriever.retrieve(variants[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=len(variants)) as pool:
+            retrieved_lists = list(pool.map(retriever.retrieve, variants))
+
     best_by_node = {}
-    for variant in variants:
-        for r in retriever.retrieve(variant):
+    for retrieved in retrieved_lists:
+        for r in retrieved:
             node_id = r.node.node_id
             existing = best_by_node.get(node_id)
             if existing is None or (r.score or 0) > (existing.score or 0):
