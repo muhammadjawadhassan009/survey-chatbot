@@ -163,9 +163,13 @@ async function search(tenantId, query, topK = 5, { country, category, fast = fal
   // retries that cold-start delay became an outright failure on exactly
   // the first message of a new conversation — the worst possible moment
   // for it. One retry gives a cold instance a second chance once it's
-  // already warmed up from the first attempt, and 10s still keeps this
-  // meaningfully tighter than a full request()'s default 15s/2-retries.
-  const opts = fast ? { retries: 1, timeoutMs: 10_000 } : {};
+  // already warmed up from the first attempt.
+  // Timeout tightened from 10s to 6s (worst case ~12.3s instead of ~20.3s
+  // with the retry backoff): search() on the Python side now runs its
+  // number-form query variants concurrently instead of one-at-a-time (see
+  // ingestion.py), so a warm instance answers well inside 6s — this timeout
+  // is now sized for "actually slow," not padded for the old serial cost.
+  const opts = fast ? { retries: 1, timeoutMs: 6_000 } : {};
   return request("GET", `/search?${qs.toString()}`, opts);
 }
 
