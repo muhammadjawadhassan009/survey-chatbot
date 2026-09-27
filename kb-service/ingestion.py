@@ -466,6 +466,36 @@ def _unique_doc_ids(tenant_id: str, registry_key: str, full_text: str) -> tuple:
     return out, True
 
 
+_FILENAME_DATE_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})[-_](\d{2})[-_](\d{2})(?!\d)")
+
+
+def _infer_date_from_filename(filename: str) -> str:
+    """Best-effort fallback for when the caller doesn't supply an explicit
+    `date`. Bulk/batch uploads (see ingest_batch's `dates` param) put the
+    burden of building a filename->date JSON map on the admin — for a batch
+    of a few dozen dated reports, that map often just doesn't get built, and
+    every chunk silently ends up with no recency metadata at all, making
+    _recency_boost() a permanent no-op for the entire tenant even though
+    recency clearly matters for this kind of content (many reports on the
+    same topic, published across years — exactly the case a recency signal
+    exists to disambiguate). Many real-world exports (this platform's own
+    included) already encode the publish date in the filename itself
+    (e.g. "pew-2025-09-17-how-americans-view-ai....md") — if it's there,
+    use it rather than silently doing without. Returns None (never raises)
+    if no YYYY-MM-DD-shaped run is found, or if what's found isn't a real
+    calendar date — callers should treat that exactly like "no date given".
+    """
+    m = _FILENAME_DATE_RE.search(filename)
+    if not m:
+        return None
+    candidate = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return candidate
+
+
 def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: bool = False, country: str = None, category: str = None, date: str = None, qdrant_url: str = None, qdrant_api_key: str = None, collection_name: str = None) -> dict:
     """Extract, section-split, chunk, embed, and upsert one file's content
     into this tenant's Qdrant collection. Safe to call repeatedly with the
@@ -490,9 +520,11 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
     date, if given (ISO "YYYY-MM-DD"), is stored in every chunk's metadata
     and used by search() as a recency signal — e.g. a report's publication
     date, so a query like "latest poll on X" can prefer a newer report over
-    an older one that merely reads as more textually similar. Optional and
-    inert for tenants/files that don't set it (e.g. evergreen consultancy
-    content, where recency isn't a meaningful signal).
+    an older one that merely reads as more textually similar. If not given,
+    falls back to _infer_date_from_filename() before giving up — see that
+    function for why. Still fully optional/inert end-to-end for
+    tenants/files where neither source has a date (e.g. evergreen
+    consultancy content, where recency isn't a meaningful signal).
 
     Persists a copy of the original file to config.FILES_DIR so a later
     re-index doesn't require asking the user to re-upload."""
@@ -522,6 +554,9 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
 
     if not full_text.strip():
         return {"filename": original_filename, "status": "skipped", "reason": "No extractable text found"}
+
+    if not date:
+        date = _infer_date_from_filename(original_filename)
 
     docstore = get_docstore(tenant_id)
     vector_store = get_vector_store(qdrant_url, qdrant_api_key, collection_name)
