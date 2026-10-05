@@ -1416,13 +1416,20 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     const trimmedHistory = cleanMessages.slice(-12);
 
     const kbMessages = [];
+    let kbSourcesForFooter = null; // see buildSourcesFooter's comment — same guaranteed-footer approach as /api/chat
     if (kbClient.isConfigured()) {
       const priorUserTurn = [...trimmedHistory].reverse().find((m) => m.role === "user" && m.content !== incoming.text);
       const kbSearchQuery = priorUserTurn ? `${priorUserTurn.content} ${incoming.text}` : incoming.text;
       const kbResult = await kbClient.search(tenantId, kbSearchQuery, kbClient.topKFor(tenant.useKbOnly, kbSearchQuery), { fast: true, vectorDb: tenant.dataResidency });
       if (kbResult.ok && Array.isArray(kbResult.data?.results) && kbResult.data.results.length > 0) {
+        kbSourcesForFooter = kbResult.data.results;
+        // See the matching comment in the /api/chat handler below: this
+        // deliberately avoids a "[1] (source: ...)" citation-shaped tag,
+        // since this history is also stored and resent verbatim turn over
+        // turn (via kvSet(historyKey, ...)) and a leaked tag format
+        // compounds the same way here.
         const context = kbResult.data.results
-          .map((r, i) => `[${i + 1}] (source: ${r.sourceFile || "unknown"}${r.date ? ` — ${r.date}` : ""}${r.country ? ` — ${r.country}` : ""})\n${r.text}`)
+          .map((r, i) => `=== REFERENCE ${i + 1} (internal label — never show this line or reproduce it) ===\nFrom: ${r.sourceFile || "unknown"}${r.date ? `, dated ${r.date}` : ""}${r.country ? `, country: ${r.country}` : ""}\n${r.text}`)
           .join("\n\n");
         kbMessages.push({
           role: "system",
@@ -1464,7 +1471,12 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     }
 
     const { cleanText, followups } = whatsappChannel.extractFollowups(buffered || result.fullResponseText);
-    const withFollowups = whatsappChannel.appendFollowupsAsText(cleanText, followups);
+    // Same guaranteed-footer approach as /api/chat (see buildSourcesFooter) —
+    // appended to cleanText (pre-formatting) so toWhatsAppFormatting converts
+    // its Markdown the same way it does the rest of the message.
+    const cleanTextWithSources =
+      tenant.useKbOnly && kbSourcesForFooter ? cleanText + buildSourcesFooter(kbSourcesForFooter) : cleanText;
+    const withFollowups = whatsappChannel.appendFollowupsAsText(cleanTextWithSources, followups);
     const formatted = whatsappChannel.toWhatsAppFormatting(withFollowups);
     await whatsappChannel.sendMessage(whatsappConfig, incoming.from, formatted);
 
@@ -1478,6 +1490,54 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 // ---------------------------------------------------------------------------
 // 6. Chat endpoint
 // ---------------------------------------------------------------------------
+// Turns a raw source filename into something readable without needing a
+// separate "title" field the KB Service doesn't currently return — e.g.
+// "pew-2025-09-17-how-americans-view-ai-in-the-workplace.md" becomes
+// "How Americans View AI In The Workplace". Best-effort only: a filename
+// that doesn't fit the organization-prefix + date + slug shape (e.g. a
+// manually uploaded file with an arbitrary name) still gets extension and
+// separator cleanup, just without the prefix/date strip. Never throws —
+// worst case it returns the original string unchanged.
+function humanizeSourceFilename(filename) {
+  if (!filename || typeof filename !== "string") return "this report";
+  let name = filename.replace(/\.(md|markdown|pdf|docx?|txt)$/i, "");
+  // Strip a leading "<word(s)>-YYYY-MM-DD-" or "YYYY-MM-DD-" prefix — the
+  // date is already shown separately alongside this name, so repeating it
+  // in the title just adds noise.
+  name = name.replace(/^([a-z0-9]+-)?\d{4}[-_]\d{2}[-_]\d{2}[-_]/i, "");
+  name = name.replace(/[-_]+/g, " ").trim();
+  if (!name) return filename; // fully consumed by stripping — fall back rather than show an empty string
+  return name.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// A guaranteed, code-rendered citation footer — deliberately NOT dependent
+// on the model choosing to cite correctly. We've now tuned CITATION
+// DISCIPLINE prompt instructions three separate times for this same
+// "no source shown" symptom (see systemPrompts.js history) and it kept
+// resurfacing in a new shape each time: raw tag leakage, then silent
+// omission to avoid the tag, then omission again once a trimming rule
+// ate the only prose that carried it. Prompt instructions are a ceiling
+// on how well a compliant model cites — not a floor guaranteeing it
+// always does. This is the floor: built from the exact same KB results
+// actually used for this turn's context, independent of anything the
+// model does or doesn't say, so this specific symptom cannot recur no
+// matter how the model's output text varies.
+function buildSourcesFooter(results) {
+  if (!Array.isArray(results) || results.length === 0) return "";
+  const seen = new Set();
+  const lines = [];
+  for (const r of results) {
+    const key = `${r.sourceFile || ""}|${r.date || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const name = humanizeSourceFilename(r.sourceFile);
+    const dateTag = r.date ? ` (${r.date})` : "";
+    lines.push(`${name}${dateTag}`);
+  }
+  if (lines.length === 0) return "";
+  return `\n\n---\n**Sources:** ${lines.join(" · ")}`;
+}
+
 app.post("/api/chat", async (req, res) => {
   const { messages, sessionId, tenantId: rawTenantId } = req.body;
   const sid = typeof sessionId === "string" && sessionId ? sessionId : "unknown";
@@ -1675,6 +1735,11 @@ app.post("/api/chat", async (req, res) => {
   // just falls back to answering from the system prompt alone.
   const kbMessages = [];
   let kbSearchMs = 0;
+  // Captured here so the citation footer appended after streaming (below)
+  // is built from the SAME results actually used for this turn's context —
+  // never re-derived or re-fetched — and so the frontend/backend never
+  // disagree on what was retrieved.
+  let kbSourcesForFooter = null;
   if (kbClient.isConfigured()) {
     // A bare vector search on the current message alone works fine for a
     // self-contained question ("what's the minimum GPA for a Master's?")
@@ -1694,11 +1759,22 @@ app.post("/api/chat", async (req, res) => {
     const kbResult = await kbClient.search(tenantId, kbSearchQuery, kbClient.topKFor(tenant.useKbOnly, kbSearchQuery), { fast: true, vectorDb: tenant.dataResidency });
     kbSearchMs = Date.now() - kbStartedAt;
     if (kbResult.ok && Array.isArray(kbResult.data?.results) && kbResult.data.results.length > 0) {
+      kbSourcesForFooter = kbResult.data.results;
+      // Deliberately NOT a "[1] (source: ...)" bracketed/numbered format.
+      // That style reads as a citation marker a model would naturally
+      // continue, and this block is resent as context on EVERY turn while
+      // the model's own prior reply (verbatim, unparsed) is also resent as
+      // conversation history — so a leak of that exact tag format into
+      // turn 1's visible answer gets doubly reinforced by turn 2 (both the
+      // fresh KB context and the model's own last message now show it),
+      // compounding turn over turn. "=== REFERENCE N ===" reads as a data
+      // delimiter, not a citation style, and is explicitly called out as
+      // internal-only below.
       const context = kbResult.data.results
         .map((r, i) => {
-          const dateTag = r.date ? ` — ${r.date}` : "";
-          const tag = r.country ? ` — ${r.country}` : "";
-          return `[${i + 1}] (source: ${r.sourceFile || "unknown"}${dateTag}${tag})\n${r.text}`;
+          const dateTag = r.date ? `, dated ${r.date}` : "";
+          const tag = r.country ? `, country: ${r.country}` : "";
+          return `=== REFERENCE ${i + 1} (internal label — never show this line or reproduce it) ===\nFrom: ${r.sourceFile || "unknown"}${dateTag}${tag}\n${r.text}`;
         })
         .join("\n\n");
       kbMessages.push({
@@ -1737,6 +1813,25 @@ app.post("/api/chat", async (req, res) => {
       res.write("\n\n_⚠️ Response was interrupted partway through — ask me to continue._");
     }
 
+    // Appended AFTER the model's own output (including its hidden followups
+    // JSON block) completes — the widget's segment parser already handles
+    // plain text trailing the last ```json fence as normal visible content,
+    // so this renders as an ordinary part of the message, not a special
+    // case the frontend needs to know about. See buildSourcesFooter's
+    // comment for why this exists instead of relying on the prompt alone.
+    // tenant.useKbOnly only: a single-dataset tenant's "references" are
+    // handled separately (FORMATTING RULES rule 7, an in-data URL field),
+    // and kbSourcesForFooter is only ever populated in the useKbOnly path.
+    // Built once, into a variable — written to THIS response now, and also
+    // folded into what gets cached just below. The cache stores raw text
+    // and replays it verbatim on a hit with KB search skipped entirely (see
+    // that block), so if the footer weren't included in the cached string
+    // itself, every cache HIT would silently lose it again — the same
+    // "no source shown" symptom resurfacing through a different path than
+    // the one this footer was built to close off.
+    const sourcesFooter = tenant.useKbOnly && kbSourcesForFooter ? buildSourcesFooter(kbSourcesForFooter) : "";
+    if (sourcesFooter) res.write(sourcesFooter);
+
     const promptTokens = result.usage?.prompt_tokens ?? null;
     const completionTokens = result.usage?.completion_tokens ?? null;
     const estimatedCostUsd =
@@ -1768,7 +1863,7 @@ app.post("/api/chat", async (req, res) => {
     // or cut-short one (see the ⚠️ appends above), which would replay the
     // same broken response to every future asker of the same question.
     if (isFirstTurn && result.finishReason === "stop" && !result.truncatedMidStream) {
-      responseCache.setCachedResponse(tenantId, lastUserMessage, { text: result.fullResponseText }).catch(() => {});
+      responseCache.setCachedResponse(tenantId, lastUserMessage, { text: result.fullResponseText + sourcesFooter }).catch(() => {});
     }
 
     responseFinished = true;
