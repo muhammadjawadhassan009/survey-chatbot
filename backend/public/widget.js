@@ -1524,22 +1524,6 @@
           var reader = res.body.getReader();
           var decoder = new TextDecoder();
           var fullText = "";
-          // renderStreamedContent re-parses the ENTIRE accumulated answer
-          // from scratch every time it's called (full markdown parse, full
-          // DOMPurify sanitize, full DOM rebuild) — it has no incremental
-          // path, by design, because a streamed fenced ```json block (chart/
-          // form/followups) can only be reliably detected once its closing
-          // fence has actually arrived. Calling it on every single network
-          // chunk (which can be many times a second, well below the ~60fps a
-          // human can even perceive) made total rendering work grow
-          // roughly with the SQUARE of the response length — visibly
-          // worse the longer an answer got, especially on mobile. Throttling
-          // to a fixed cadence bounds total render work by wall-clock time
-          // instead of by chunk count; nothing is ever lost, since each
-          // allowed render always re-renders the full text accumulated so
-          // far, and the final `done` render below always runs unthrottled.
-          var lastRenderAt = 0;
-          var RENDER_THROTTLE_MS = 80;
 
           function finalize(followups) {
             if (fullText.trim().length === 0) {
@@ -1563,12 +1547,8 @@
                 return;
               }
               fullText += decoder.decode(result.value, { stream: true });
-              var now = Date.now();
-              if (now - lastRenderAt >= RENDER_THROTTLE_MS) {
-                lastRenderAt = now;
-                renderStreamedContent(contentContainer, fullText);
-                maybeAutoScroll();
-              }
+              renderStreamedContent(contentContainer, fullText);
+              maybeAutoScroll();
               return pump();
             });
           }
