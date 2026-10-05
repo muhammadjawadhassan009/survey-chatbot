@@ -17,21 +17,15 @@ a documented no-op on embedded/local Qdrant mode (dev); filtering
 correctness still works locally regardless, the disk co-location
 performance benefit only shows up on real server/cloud Qdrant.
 
-Section-aware chunking: a file is no longer always one document. Every
-Markdown (.md/.markdown) file is read as raw text (not through
-SimpleDirectoryReader's default extractor — see the .md branch in
-ingest_file for why) and split at its own heading structure ("## Heading",
-adaptively picking whichever heading level is actually used consistently),
-which is the PRIMARY and most common case. Failing that, a file that
-declares its own numbered Table of Contents (a "Table of Contents" /
-"Contents" line followed by a run of "1. Heading", "2. Heading", ... lines
-— common in PDF/DOCX-sourced text where a literal contents listing
-survived extraction) is split on that instead. Each detected section
-becomes its own document before chunking, so SentenceSplitter can never
-blend two different topics into one chunk. Files where neither method
-finds anything reliable fall back to being treated as one whole document,
-exactly as before — this can only improve chunking quality, never make it
-worse, for files that don't have detectable structure.
+Section-aware chunking: a file is no longer always one document. If the
+file declares its own Table of Contents (a "Table of Contents" / "Contents"
+line followed by a run of "1. Heading", "2. Heading", ... lines — the
+pattern used by these knowledge-base exports), each TOC entry becomes its
+own document before chunking, so SentenceSplitter can never blend two
+different topics into one chunk. Files without that structure fall back to
+being treated as one whole document, exactly as before — this can only
+improve chunking quality, never make it worse, for files that don't have a
+detectable TOC.
 
 Because of this, one filename can now map to MULTIPLE underlying doc_ids
 (one per detected section, or a single one for files without a TOC). The
@@ -46,7 +40,6 @@ collection.
 import json
 import re
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -466,36 +459,6 @@ def _unique_doc_ids(tenant_id: str, registry_key: str, full_text: str) -> tuple:
     return out, True
 
 
-_FILENAME_DATE_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})[-_](\d{2})[-_](\d{2})(?!\d)")
-
-
-def _infer_date_from_filename(filename: str) -> str:
-    """Best-effort fallback for when the caller doesn't supply an explicit
-    `date`. Bulk/batch uploads (see ingest_batch's `dates` param) put the
-    burden of building a filename->date JSON map on the admin — for a batch
-    of a few dozen dated reports, that map often just doesn't get built, and
-    every chunk silently ends up with no recency metadata at all, making
-    _recency_boost() a permanent no-op for the entire tenant even though
-    recency clearly matters for this kind of content (many reports on the
-    same topic, published across years — exactly the case a recency signal
-    exists to disambiguate). Many real-world exports (this platform's own
-    included) already encode the publish date in the filename itself
-    (e.g. "pew-2025-09-17-how-americans-view-ai....md") — if it's there,
-    use it rather than silently doing without. Returns None (never raises)
-    if no YYYY-MM-DD-shaped run is found, or if what's found isn't a real
-    calendar date — callers should treat that exactly like "no date given".
-    """
-    m = _FILENAME_DATE_RE.search(filename)
-    if not m:
-        return None
-    candidate = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    try:
-        datetime.fromisoformat(candidate)
-    except ValueError:
-        return None
-    return candidate
-
-
 def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: bool = False, country: str = None, category: str = None, date: str = None, qdrant_url: str = None, qdrant_api_key: str = None, collection_name: str = None) -> dict:
     """Extract, section-split, chunk, embed, and upsert one file's content
     into this tenant's Qdrant collection. Safe to call repeatedly with the
@@ -520,43 +483,19 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
     date, if given (ISO "YYYY-MM-DD"), is stored in every chunk's metadata
     and used by search() as a recency signal — e.g. a report's publication
     date, so a query like "latest poll on X" can prefer a newer report over
-    an older one that merely reads as more textually similar. If not given,
-    falls back to _infer_date_from_filename() before giving up — see that
-    function for why. Still fully optional/inert end-to-end for
-    tenants/files where neither source has a date (e.g. evergreen
-    consultancy content, where recency isn't a meaningful signal).
+    an older one that merely reads as more textually similar. Optional and
+    inert for tenants/files that don't set it (e.g. evergreen consultancy
+    content, where recency isn't a meaningful signal).
 
     Persists a copy of the original file to config.FILES_DIR so a later
     re-index doesn't require asking the user to re-upload."""
 
-    # .md/.markdown files are special-cased to a direct raw read rather than
-    # going through SimpleDirectoryReader's default extractor. The reason:
-    # llama-index's built-in MarkdownReader parses the file AS markdown and
-    # strips the leading "#"/"##"/"###" heading markers from the returned
-    # text entirely (e.g. "## How Americans View Data Privacy" comes back as
-    # just "How Americans View Data Privacy") — verified empirically, not
-    # assumed. _split_by_markdown_headings() above is the PRIMARY
-    # section-detection method and it matches on those exact "#" characters,
-    # so every .md file ingested through the default extractor silently lost
-    # its only usable structure before section-splitting ever ran, always
-    # fell through to the TOC-label method (which needs a literal "Table of
-    # Contents" line these files don't have either), found nothing there
-    # either, and landed on the single-whole-file fallback with the "no
-    # reliable TOC detected" warning — for every .md file, not some of them.
-    # Reading the file directly keeps the "#" markers intact so the heading
-    # splitter actually sees what it's designed to look for.
-    if file_path.suffix.lower() in (".md", ".markdown"):
-        full_text = file_path.read_text(encoding="utf-8", errors="replace").strip()
-    else:
-        reader = SimpleDirectoryReader(input_files=[str(file_path)])
-        raw_docs = reader.load_data()
-        full_text = "\n\n".join(d.text for d in raw_docs if d.text and d.text.strip())
+    reader = SimpleDirectoryReader(input_files=[str(file_path)])
+    raw_docs = reader.load_data()
+    full_text = "\n\n".join(d.text for d in raw_docs if d.text and d.text.strip())
 
     if not full_text.strip():
         return {"filename": original_filename, "status": "skipped", "reason": "No extractable text found"}
-
-    if not date:
-        date = _infer_date_from_filename(original_filename)
 
     docstore = get_docstore(tenant_id)
     vector_store = get_vector_store(qdrant_url, qdrant_api_key, collection_name)
@@ -565,12 +504,12 @@ def ingest_file(tenant_id: str, file_path: Path, original_filename: str, force: 
     new_entries, toc_detected = _unique_doc_ids(tenant_id, registry_key, full_text)
     new_doc_ids = {doc_id for doc_id, _heading, _body in new_entries}
     if not toc_detected:
-        # Not necessarily wrong — some files genuinely have no detectable
-        # structure — but for a batch of files expected to share a similar
-        # format, this usually means the file's Markdown headings and/or
-        # numbered Table of Contents don't match what split_into_sections()
-        # looks for, and it silently fell back to one whole-file chunk.
-        print(f"⚠️  No section structure detected for {tenant_id}/{registry_key} (checked both Markdown headings and a numbered Table of Contents) — ingested as a single whole-file chunk, not section-split.")
+        # Not necessarily wrong — some files genuinely have no TOC — but for
+        # a batch of files expected to share a similar structure (e.g. one
+        # visa-type template repeated per country), this usually means that
+        # file's formatting drifted enough that section-splitting couldn't
+        # trust it, and it silently fell back to one whole-file chunk.
+        print(f"⚠️  No reliable TOC detected for {tenant_id}/{registry_key} — ingested as a single whole-file chunk, not section-split. Check its Table of Contents formatting if this is unexpected.")
 
     # Clean up any doc_ids this filename owned previously but no longer
     # produces (a section was renamed, merged, or removed) — otherwise
@@ -824,22 +763,9 @@ def search(tenant_id: str, query: str, top_k: int = 5, country: str = None, cate
     # the query and merge by node id, keeping each node's best score. Runs
     # inline on every live search call — no ingestion-time changes needed.
     variants = generate_query_variants(query)
-    # Each variant needs its own embedding computation AND its own Qdrant
-    # round trip — with up to 4 variants (any query containing a number or
-    # "%", which is most survey questions), doing this one at a time
-    # multiplied the whole search's latency by up to 4x. FastEmbed's ONNX
-    # inference and the Qdrant client's HTTP call both spend most of their
-    # time outside the GIL, so a small thread pool turns this into one
-    # round trip's worth of wall-clock time instead of N.
-    if len(variants) == 1:
-        retrieved_lists = [retriever.retrieve(variants[0])]
-    else:
-        with ThreadPoolExecutor(max_workers=len(variants)) as pool:
-            retrieved_lists = list(pool.map(retriever.retrieve, variants))
-
     best_by_node = {}
-    for retrieved in retrieved_lists:
-        for r in retrieved:
+    for variant in variants:
+        for r in retriever.retrieve(variant):
             node_id = r.node.node_id
             existing = best_by_node.get(node_id)
             if existing is None or (r.score or 0) > (existing.score or 0):
