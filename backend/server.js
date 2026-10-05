@@ -300,23 +300,6 @@ async function buildTenantsMap() {
         console.warn(`⚠️  Tenant "${tenantId}" has useKbOnly:true but the KB service isn't configured (KB_SERVICE_URL unset) — this tenant's system prompt will have NO content injected at all until either is fixed.`);
       }
 
-      // Latency/cost heads-up, not an error: without useKbOnly, this
-      // tenant's ENTIRE dataset is re-serialized into the system prompt and
-      // re-sent as input tokens on every single chat turn (see
-      // lib/systemPrompts.js's dataSection()) — not just the first message
-      // of a conversation. That's fine for a small survey dataset, but a
-      // large one adds real, avoidable prompt-processing latency to every
-      // reply. 40KB is a rough "this is probably starting to hurt" line,
-      // not a hard limit — chosen well below the size where it'd risk
-      // actually blowing a model's context window, purely to flag it early.
-      const payloadSizeBytes = Buffer.byteLength(JSON.stringify(surveyPayload), "utf-8");
-      if (!tenant_meta.useKbOnly && payloadSizeBytes > 40_000) {
-        console.warn(
-          `⚠️  Tenant "${tenantId}"'s dataset is ~${Math.round(payloadSizeBytes / 1024)}KB and is being re-injected in full into the system prompt on EVERY chat turn. ` +
-          `Consider setting tenant_meta.useKbOnly:true (with KB_SERVICE_URL configured) to switch this tenant to per-turn retrieval instead — likely a real, ongoing latency and cost win.`
-        );
-      }
-
       // Was hardcoded in widget.js as "Answers are strictly grounded to
       // visa information." — a leftover from the old consultancy vertical.
       // Still overridable per tenant via tenant_meta.widgetFootnote.
